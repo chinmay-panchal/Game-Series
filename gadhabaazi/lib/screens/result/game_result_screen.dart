@@ -3,22 +3,28 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:confetti/confetti.dart';
 import '../../blocs/game/game_bloc.dart';
 import '../../blocs/game/game_event.dart';
+import '../../blocs/online/online_bloc.dart';
+import '../../blocs/online/online_event.dart';
+import '../../blocs/online/online_state.dart';
 import '../../widgets/animated_background.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_strings.dart';
 import '../home/home_screen.dart';
+import '../online/online_game_screen.dart';
 import '../../engine/history/move_history.dart';
 
 class GameResultScreen extends StatefulWidget {
   final String donkeyName;
   final List<String> finishingOrder;
   final MoveHistory history;
+  final bool isOnlineRoom;
 
   const GameResultScreen({
     super.key,
     required this.donkeyName,
     required this.finishingOrder,
     required this.history,
+    this.isOnlineRoom = false,
   });
 
   @override
@@ -101,6 +107,11 @@ class _GameResultScreenState extends State<GameResultScreen> {
                   ElevatedButton(
                     onPressed: () {
                       context.read<GameBloc>().add(RestartGame());
+                      // If it's an online game, also dispatch leave room
+                      final onlineBloc = context.read<OnlineBloc>();
+                      if (onlineBloc.state is! OnlineInitial) {
+                        onlineBloc.add(OnlineLeaveRoom());
+                      }
                       Navigator.of(context).pushAndRemoveUntil(
                         MaterialPageRoute(builder: (_) => const HomeScreen()),
                         (route) => false,
@@ -108,6 +119,26 @@ class _GameResultScreenState extends State<GameResultScreen> {
                     },
                     child: const Text(AppStrings.playAgain),
                   ),
+                  if (widget.isOnlineRoom) ...[
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.replay_rounded),
+                      label: const Text('Replay in Same Room'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF3A6FF7),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      onPressed: () {
+                        context.read<OnlineBloc>().add(OnlineRestartRoom());
+                        Navigator.of(context).pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (_) => const OnlineGameScreen()),
+                          (route) => false,
+                        );
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),

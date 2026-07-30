@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'enums/suit.dart';
 import 'played_card.dart';
+import 'card_model.dart';
 
 class RoundModel extends Equatable {
   final int roundNumber;
@@ -8,6 +9,7 @@ class RoundModel extends Equatable {
   final String leadPlayerId;
   final List<PlayedCard> playedCards;
   final String? winnerId;
+  final PlayingCard? punishmentCard;
 
   const RoundModel({
     required this.roundNumber,
@@ -15,6 +17,7 @@ class RoundModel extends Equatable {
     required this.leadPlayerId,
     this.playedCards = const [],
     this.winnerId,
+    this.punishmentCard,
   });
 
   RoundModel copyWith({
@@ -23,6 +26,7 @@ class RoundModel extends Equatable {
     String? leadPlayerId,
     List<PlayedCard>? playedCards,
     String? winnerId,
+    PlayingCard? punishmentCard,
   }) {
     return RoundModel(
       roundNumber: roundNumber ?? this.roundNumber,
@@ -30,6 +34,7 @@ class RoundModel extends Equatable {
       leadPlayerId: leadPlayerId ?? this.leadPlayerId,
       playedCards: playedCards ?? this.playedCards,
       winnerId: winnerId ?? this.winnerId,
+      punishmentCard: punishmentCard ?? this.punishmentCard,
     );
   }
 
@@ -46,13 +51,16 @@ class RoundModel extends Equatable {
       roundNumber: json['roundNumber'] as int,
       suit: Suit.values.firstWhere((e) => e.name == json['suit']),
       leadPlayerId: json['leadPlayerId'] as String,
-      playedCards: (json['playedCards'] as List<dynamic>)
-          .map((c) => PlayedCard.fromJson(c as Map<String, dynamic>))
-          .toList(),
+      playedCards: (json['playedCards'] as List?)
+          ?.map((e) => PlayedCard.fromJson(e))
+          .toList() ?? [],
       winnerId: json['winnerId'] as String?,
+      punishmentCard: json['punishmentCard'] != null 
+          ? PlayingCard.fromJson(json['punishmentCard']) 
+          : null,
     );
   }
 
   @override
-  List<Object?> get props => [roundNumber, suit, leadPlayerId, playedCards, winnerId];
+  List<Object?> get props => [roundNumber, suit, leadPlayerId, playedCards, winnerId, punishmentCard];
 }

@@ -7,6 +7,7 @@ import '../../engine/move_result.dart';
 import '../../models/enums/game_phase.dart';
 import '../../engine/rules/move_rules.dart';
 import '../../engine/rules/punishment_rules.dart';
+import '../../services/audio_service.dart';
 import 'game_event.dart';
 import 'game_state.dart';
 
@@ -16,6 +17,7 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
   
   final MoveRules _moveRules = MoveRules();
   final PunishmentRules _punishmentRules = PunishmentRules();
+  final AudioService _audio = AudioService();
 
   GameBloc({required GameEngine engine})
       : _engine = engine,
@@ -27,6 +29,7 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
     on<PlayCard>(_onPlayCard);
     on<GivePunishmentCard>(_onGivePunishmentCard);
     on<StartNextRound>(_onStartNextRound);
+    on<DistributeNewCards>(_onDistributeNewCards);
     on<RestartGame>(_onRestartGame);
   }
 
@@ -53,7 +56,6 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
     try {
       final jsonMap = jsonDecode(event.jsonState) as Map<String, dynamic>;
       _internalState = engine_state.GameState.fromJson(jsonMap);
-      // Immediately emit state based on phase
       _emitStateBasedOnPhase(emit, _internalState!, isHandRevealed: false);
     } catch (e) {
       emit(const GameError("Failed to load game."));
@@ -72,7 +74,6 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
 
   void _onRevealHand(RevealHand event, Emitter<GameBlocState> emit) {
     if (_internalState == null) return;
-    
     _emitStateBasedOnPhase(emit, _internalState!, isHandRevealed: true);
   }
 
@@ -85,11 +86,13 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
     _saveState();
 
     if (result.moveType == MoveType.invalidMove) {
+      _audio.playErrorSound();
       emit(GameError(result.message ?? "Invalid move"));
       _emitStateBasedOnPhase(emit, _internalState!);
       return;
     }
     
+    _audio.playCardSound();
     _emitStateBasedOnPhase(emit, _internalState!);
   }
 
@@ -102,11 +105,13 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
     _saveState();
 
     if (result.moveType == MoveType.invalidMove) {
+      _audio.playErrorSound();
       emit(GameError(result.message ?? "Invalid move"));
       _emitStateBasedOnPhase(emit, _internalState!);
       return;
     }
 
+    _audio.playPunishSound();
     _emitStateBasedOnPhase(emit, _internalState!);
   }
 
@@ -117,6 +122,7 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
     _internalState = result.gameState;
     _saveState();
     
+    _audio.playTurnSwitchSound();
     _emitStateBasedOnPhase(emit, _internalState!);
   }
 
@@ -129,6 +135,20 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
       // Ignore
     }
     emit(GameInitial());
+  }
+
+  void _onDistributeNewCards(DistributeNewCards event, Emitter<GameBlocState> emit) {
+    if (_internalState == null) return;
+    final result = _engine.distributeNewCards(_internalState!);
+    if (result.moveType != MoveType.invalidMove) {
+      _internalState = result.gameState;
+      _saveState();
+      _audio.playTurnSwitchSound();
+      _emitStateBasedOnPhase(emit, _internalState!);
+    } else {
+      emit(GameError(result.message ?? "Cannot distribute cards"));
+      _emitStateBasedOnPhase(emit, _internalState!);
+    }
   }
 
   void _emitStateBasedOnPhase(Emitter<GameBlocState> emit, engine_state.GameState state, {bool isHandRevealed = false, bool isFirstTurn = false}) {
@@ -155,6 +175,7 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
               : null,
           isHandRevealed: isHandRevealed,
           isFirstTurn: isFirstTurn,
+          unendingLoopDetected: state.unendingLoopDetected,
         ));
         break;
       case GamePhase.punishmentSelection:

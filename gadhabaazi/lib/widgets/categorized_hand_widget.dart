@@ -10,12 +10,15 @@ class CategorizedHandWidget extends StatefulWidget {
   final Function(PlayingCard) onCardTap;
   final bool Function(PlayingCard) isCardEnabled;
 
+  final Suit? currentSuit;
+
   const CategorizedHandWidget({
     super.key,
     required this.cards,
     this.selectedCard,
     required this.onCardTap,
     required this.isCardEnabled,
+    this.currentSuit,
   });
 
   @override
@@ -34,7 +37,7 @@ class _CategorizedHandWidgetState extends State<CategorizedHandWidget> {
   @override
   void didUpdateWidget(CategorizedHandWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.cards != oldWidget.cards) {
+    if (widget.cards != oldWidget.cards || widget.currentSuit != oldWidget.currentSuit) {
       _autoSelectSuit();
     }
   }
@@ -44,6 +47,15 @@ class _CategorizedHandWidgetState extends State<CategorizedHandWidget> {
       _selectedSuit = null;
       return;
     }
+
+    // Auto-select active round suit if user has matching cards
+    if (widget.currentSuit != null && widget.cards.any((c) => c.suit == widget.currentSuit)) {
+      setState(() {
+        _selectedSuit = widget.currentSuit;
+      });
+      return;
+    }
+
     // Keep selected suit if player still has cards of that suit
     if (_selectedSuit != null && widget.cards.any((c) => c.suit == _selectedSuit)) {
       return;

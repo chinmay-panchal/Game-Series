@@ -18,6 +18,11 @@ class GameState extends Equatable {
   final List<String> finishedPlayerIds;
   
   final MoveHistory history;
+  
+  /// Track unending loops for 2-player games
+  final int unendingLoopCounter;
+  final int lastTotalCardsCount;
+  final bool unendingLoopDetected;
 
   const GameState({
     required this.players,
@@ -28,6 +33,9 @@ class GameState extends Equatable {
     this.donkeyPlayerId,
     this.finishedPlayerIds = const [],
     this.history = const MoveHistory(),
+    this.unendingLoopCounter = 0,
+    this.lastTotalCardsCount = 0,
+    this.unendingLoopDetected = false,
   });
 
   GameState copyWith({
@@ -40,6 +48,9 @@ class GameState extends Equatable {
     String? donkeyPlayerId,
     List<String>? finishedPlayerIds,
     MoveHistory? history,
+    int? unendingLoopCounter,
+    int? lastTotalCardsCount,
+    bool? unendingLoopDetected,
   }) {
     return GameState(
       players: players ?? this.players,
@@ -50,6 +61,9 @@ class GameState extends Equatable {
       donkeyPlayerId: donkeyPlayerId ?? this.donkeyPlayerId,
       finishedPlayerIds: finishedPlayerIds ?? this.finishedPlayerIds,
       history: history ?? this.history,
+      unendingLoopCounter: unendingLoopCounter ?? this.unendingLoopCounter,
+      lastTotalCardsCount: lastTotalCardsCount ?? this.lastTotalCardsCount,
+      unendingLoopDetected: unendingLoopDetected ?? this.unendingLoopDetected,
     );
   }
 
@@ -62,6 +76,9 @@ class GameState extends Equatable {
     'donkeyPlayerId': donkeyPlayerId,
     'finishedPlayerIds': finishedPlayerIds,
     'history': history.toJson(),
+    'unendingLoopCounter': unendingLoopCounter,
+    'lastTotalCardsCount': lastTotalCardsCount,
+    'unendingLoopDetected': unendingLoopDetected,
   };
 
   factory GameState.fromJson(Map<String, dynamic> json) {
@@ -80,6 +97,9 @@ class GameState extends Equatable {
       donkeyPlayerId: json['donkeyPlayerId'] as String?,
       finishedPlayerIds: (json['finishedPlayerIds'] as List<dynamic>).cast<String>(),
       history: MoveHistory.fromJson(json['history'] as Map<String, dynamic>),
+      unendingLoopCounter: json['unendingLoopCounter'] as int? ?? 0,
+      lastTotalCardsCount: json['lastTotalCardsCount'] as int? ?? 0,
+      unendingLoopDetected: json['unendingLoopDetected'] as bool? ?? false,
     );
   }
 
@@ -93,5 +113,8 @@ class GameState extends Equatable {
         donkeyPlayerId,
         finishedPlayerIds,
         history,
+        unendingLoopCounter,
+        lastTotalCardsCount,
+        unendingLoopDetected,
       ];
 }

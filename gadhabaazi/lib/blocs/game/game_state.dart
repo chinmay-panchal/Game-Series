@@ -30,6 +30,7 @@ class GamePlayerTurn extends GameBlocState {
   final PlayedCard? highestCard;
   final bool isHandRevealed;
   final bool isFirstTurn;
+  final bool unendingLoopDetected;
 
   const GamePlayerTurn({
     required this.activePlayer,
@@ -39,10 +40,11 @@ class GamePlayerTurn extends GameBlocState {
     this.highestCard,
     this.isHandRevealed = false,
     this.isFirstTurn = false,
+    this.unendingLoopDetected = false,
   });
 
   @override
-  List<Object?> get props => [activePlayer, otherPlayers, currentRound, currentSuit, highestCard, isHandRevealed, isFirstTurn];
+  List<Object?> get props => [activePlayer, otherPlayers, currentRound, currentSuit, highestCard, isHandRevealed, isFirstTurn, unendingLoopDetected];
 }
 
 class GamePunishmentSelection extends GameBlocState {

@@ -79,30 +79,24 @@ class _GameTableViewState extends State<GameTableView> {
         children: [
           const SizedBox(height: 16),
 
-          // Active player turn indicator
-          Text(
-            state.activePlayer.name,
-            style: const TextStyle(
-              color: AppColors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
+
           SuitIndicatorWidget(suit: state.currentSuit),
 
           if (state.isFirstTurn && !state.isHandRevealed) ...[
             const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: AppColors.redCard.withAlpha(150),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+                ],
               ),
               child: Text(
                 "${state.activePlayer.name} starts first with the Ace of Spades ♠",
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: Colors.black87,
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
                 ),
@@ -124,9 +118,26 @@ class _GameTableViewState extends State<GameTableView> {
       );
     }
     if (state is GamePlayerTurn) {
-      return TableCenterWidget(
-        currentRound: state.currentRound,
-        highestCard: state.highestCard,
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (state.unendingLoopDetected && state.isHandRevealed) ...[
+            ElevatedButton.icon(
+              onPressed: () => context.read<GameBloc>().add(DistributeNewCards()),
+              icon: const Icon(Icons.refresh),
+              label: const Text("Distribute New Cards"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.redCard,
+                foregroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          TableCenterWidget(
+            currentRound: state.currentRound,
+            highestCard: state.highestCard,
+          ),
+        ],
       );
     }
     if (state is GameRoundCompleted) {
@@ -187,20 +198,31 @@ class _GameTableViewState extends State<GameTableView> {
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 8,
+                          vertical: 12,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.red.withAlpha(160),
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+                          ],
+                          border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
                         ),
-                        child: const Text(
-                          "⚠️ No matching suit — this card will be sent as punishment",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+                            SizedBox(width: 8),
+                            Text(
+                              "No matching suit\nThis card will be given as punishment",
+                              style: TextStyle(
+                                color: Colors.black87,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 8),

@@ -47,4 +47,6 @@ class GivePunishmentCard extends GameEvent {
 
 class StartNextRound extends GameEvent {}
 
+class DistributeNewCards extends GameEvent {}
+
 class RestartGame extends GameEvent {}

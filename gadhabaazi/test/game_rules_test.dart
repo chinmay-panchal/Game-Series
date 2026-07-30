@@ -5,6 +5,7 @@ import 'package:gadhabaazi/models/enums/rank.dart';
 import 'package:gadhabaazi/models/player_model.dart';
 import 'package:gadhabaazi/engine/rules/move_rules.dart';
 import 'package:gadhabaazi/engine/rules/loser_rules.dart';
+import 'package:gadhabaazi/engine/game_engine.dart';
 
 void main() {
   group('MoveRules', () {
@@ -66,6 +67,36 @@ void main() {
       final p3 = Player(id: 'p3', name: 'P3', hand: []);
 
       expect(loserRules.finishedPlayerIds([p1, p2, p3]), equals(['p1', 'p3']));
+    });
+  });
+
+  group('PunishmentRules Engine Test', () {
+    test('punishment sweeps all played table cards + punishment card to target player', () {
+      final engine = GameEngine();
+      final res = engine.startGame(['P1', 'P2', 'P3']);
+      var state = res.gameState;
+
+      // Find who has Ace of Spades (P1 or P2 or P3)
+      final starterIdx = state.activePlayerIndex;
+      final starterId = state.players[starterIdx].id;
+
+      // Starter plays Ace of Spades
+      final aceSpades = PlayingCard(suit: Suit.spades, rank: Rank.ace);
+      final playRes = engine.playCard(state, starterId, aceSpades);
+      state = playRes.gameState;
+
+      // Next player has no spades (we simulate hand update for test)
+      final nextIdx = state.activePlayerIndex;
+      final nextId = state.players[nextIdx].id;
+      final punishCard = state.players[nextIdx].hand.firstWhere((c) => c.suit != Suit.spades);
+
+      final giveRes = engine.givePunishment(state, nextId, punishCard);
+      final finalState = giveRes.gameState;
+
+      final starterPlayer = finalState.players.firstWhere((p) => p.id == starterId);
+      // Starter should have original hand - 1 (played Ace) + 1 (Ace returned/swept back) + 1 (punishment card)
+      expect(starterPlayer.hand.contains(aceSpades), isTrue);
+      expect(starterPlayer.hand.contains(punishCard), isTrue);
     });
   });
 }
