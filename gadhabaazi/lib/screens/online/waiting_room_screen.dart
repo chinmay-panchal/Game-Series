@@ -8,6 +8,7 @@ import '../../widgets/animated_background.dart';
 import '../../core/constants/app_colors.dart';
 import '../../widgets/premium_toast.dart';
 import 'online_game_screen.dart';
+import '../home/home_screen.dart';
 
 class WaitingRoomScreen extends StatelessWidget {
   const WaitingRoomScreen({super.key});
@@ -25,7 +26,12 @@ class WaitingRoomScreen extends StatelessWidget {
             MaterialPageRoute(builder: (_) => const OnlineGameScreen()),
           );
         } else if (state is OnlineInitial) {
-          Navigator.of(context).pop();
+          // Use pushAndRemoveUntil in case there's no route to pop back to
+          // (e.g. when arriving here via "Replay in Same Room" which clears the stack)
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+            (route) => false,
+          );
         }
       },
       builder: (context, state) {

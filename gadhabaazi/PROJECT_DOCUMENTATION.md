@@ -46,11 +46,12 @@ When a player **does not have any cards of the round suit**:
 
 ### D. Unending Loop Detection & Card Redistribution
 In 2-player games, players can enter an infinite loop of trading cards back and forth without finishing hands.
-- **Detection**: Track total card count across rounds. If total cards remain constant for 3 consecutive rounds, `unendingLoopDetected` is set to `true`.
+- **Detection**: Track total card count across rounds. If the total active cards in play are **less than or equal to 4** (`totalCards <= 4`), and this total remains constant for 3 consecutive rounds, `unendingLoopDetected` is set to `true`.
 - **Redistribution Logic (`distributeNewCards`)**:
   - Collects cards strictly from **normal completed rounds** (excluding punishment rounds).
   - Filters out any card **currently held in any active player's hand**.
   - Shuffles the remaining distinct discard pool and deals up to 5 new cards to each player, resolving the loop safely without card duplication.
+- **Automation**: In online mode, redistribution is fully automated by the host once a loop is detected, showing a global alert toast to all players.
 
 ### E. Game Over & Donkey Determination (`rules/loser_rules.dart`)
 - When a player empties their hand, they finish the game and rank safely.
@@ -79,6 +80,8 @@ sequenceDiagram
 - **Host Role**: The player who created the room runs the local `GameEngine`. Host validates guest moves, handles turn transitions, and syncs game state to RTDB.
 - **Guest Role**: Guests listen to `/rooms/$roomId/gameState` and their private hand stream `/rooms/$roomId/hands/$uid/cards`. Moves are submitted via `/rooms/$roomId/pendingAction`.
 - **Host Migration**: If the current host disconnects, the next active online player in join order automatically claims host leadership (`claimHost`).
+- **Round Transitions**: Fully automated. Once a round completes, a 2-second timer triggers the host to auto-start the next round, removing any manual "Next Round" buttons.
+- **Punishments Notification**: When player X punishes player Y, a global announcement notification is shown to all players in the room (hiding the specific card detail from third-party players).
 
 ---
 

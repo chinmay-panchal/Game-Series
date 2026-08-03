@@ -165,9 +165,11 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
       case GamePhase.playerTurn:
         final activePlayer = state.players[state.activePlayerIndex];
         final otherPlayers = state.players.where((p) => p.id != activePlayer.id).toList();
+        final Map<String, String> pNames = {for (var p in state.players) p.id: p.name};
         emit(GamePlayerTurn(
           activePlayer: activePlayer,
           otherPlayers: otherPlayers,
+          playerNames: pNames,
           currentRound: state.currentRound,
           currentSuit: state.currentRound?.suit,
           highestCard: state.currentRound != null 
@@ -191,10 +193,12 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
       case GamePhase.roundEnd:
         final leaderId = _moveRules.roundLeaderId(state.completedRounds.last);
         final leaderName = state.players.firstWhere((p) => p.id == leaderId).name;
+        final Map<String, String> pNames = {for (var p in state.players) p.id: p.name};
         
         emit(GameRoundCompleted(
           nextRoundLeaderName: leaderName,
           completedRound: state.completedRounds.last,
+          playerNames: pNames,
         ));
         break;
       case GamePhase.gameOver:

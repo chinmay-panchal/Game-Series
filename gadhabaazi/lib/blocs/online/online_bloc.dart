@@ -596,6 +596,11 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     final isMyTurn = activeEnginePlayer.id == myEnginePlayer.id;
 
+    final Map<String, String> pNames = {};
+    for (int i = 0; i < playerUids.length; i++) {
+      pNames['p$i'] = _players.firstWhere((p) => p.uid == playerUids[i], orElse: () => OnlinePlayerModel(uid: playerUids[i], name: 'Player $i', isOnline: true, joinedAt: 0)).name;
+    }
+
     switch (gs.phase) {
       case GamePhase.playerTurn:
       case GamePhase.turnTransition:
@@ -610,6 +615,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
               ? _moveRules.currentHighestCard(gs.currentRound!.playedCards)
               : null,
           allPlayers: _players,
+          playerNames: pNames,
           isHost: true,
           isFirstTurn: gs.completedRounds.isEmpty && gs.currentRound == null,
           unendingLoopDetected: gs.unendingLoopDetected,
@@ -647,6 +653,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         emit(OnlineRoundCompleted(
           nextRoundLeaderName: leaderName,
           completedRound: completedRound,
+          playerNames: pNames,
           isHost: true,
           punishmentCard: completedRound.punishmentCard,
           punishmentReceiverName: punishReceiverName,
@@ -701,6 +708,12 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       }
     }
 
+    final Map<String, String> pNames = {};
+    for (int i = 0; i < playerOrder.length; i++) {
+      final uid = playerOrder[i];
+      pNames['p$i'] = _players.firstWhere((p) => p.uid == uid, orElse: () => OnlinePlayerModel(uid: uid, name: 'Player', isOnline: true, joinedAt: 0)).name;
+    }
+
     switch (phase) {
       case 'playerTurn':
       case 'turnTransition':
@@ -716,6 +729,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
                 ? _moveRules.currentHighestCard(currentRound.playedCards)
                 : null,
             allPlayers: _players,
+            playerNames: pNames,
             isHost: false,
             isFirstTurn: completedRounds.isEmpty && currentRound == null,
             unendingLoopDetected: data['unendingLoopDetected'] as bool? ?? false,
@@ -726,6 +740,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
             myHand: _myHand,
             currentRound: currentRound,
             allPlayers: _players,
+            playerNames: pNames,
           ));
         }
         break;
@@ -752,6 +767,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
             myHand: _myHand,
             currentRound: currentRound,
             allPlayers: _players,
+            playerNames: pNames,
           ));
         }
         break;
@@ -794,6 +810,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         emit(OnlineRoundCompleted(
           nextRoundLeaderName: winnerName,
           completedRound: lastRound,
+          playerNames: pNames,
           isHost: false,
           punishmentCard: lastRound.punishmentCard,
           punishmentReceiverName: punishReceiverName,

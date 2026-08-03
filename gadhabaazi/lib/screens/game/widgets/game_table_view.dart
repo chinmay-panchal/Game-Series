@@ -136,6 +136,7 @@ class _GameTableViewState extends State<GameTableView> {
           TableCenterWidget(
             currentRound: state.currentRound,
             highestCard: state.highestCard,
+            playerNames: state.playerNames,
           ),
         ],
       );
@@ -144,6 +145,7 @@ class _GameTableViewState extends State<GameTableView> {
       return TableCenterWidget(
         currentRound: state.completedRound,
         highestCard: null,
+        playerNames: state.playerNames,
       );
     }
     return const SizedBox(height: 250);

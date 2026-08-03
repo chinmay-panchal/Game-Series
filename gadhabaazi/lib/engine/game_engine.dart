@@ -229,10 +229,12 @@ class GameEngine {
     int lastTotalCardsCount = state.lastTotalCardsCount;
     bool unendingLoopDetected = state.unendingLoopDetected;
 
-    // Unending loop detection for 2-player games
-    if (newState.players.length == 2 && !newState.finishedPlayerIds.contains(newState.players[0].id) && !newState.finishedPlayerIds.contains(newState.players[1].id)) {
-      int currentTotalCards = newState.players[0].hand.length + newState.players[1].hand.length;
-      if (currentTotalCards == lastTotalCardsCount) {
+    // Unending loop detection: only when 2 players remain with <= 4 total cards between them
+    final activePlayers = newState.players.where((p) => !newState.finishedPlayerIds.contains(p.id)).toList();
+    if (activePlayers.length == 2) {
+      int currentTotalCards = activePlayers[0].hand.length + activePlayers[1].hand.length;
+      // Only count towards redistribution when total cards are <= 4
+      if (currentTotalCards <= 4 && currentTotalCards == lastTotalCardsCount) {
         unendingLoopCounter++;
       } else {
         unendingLoopCounter = 0;
@@ -258,7 +260,8 @@ class GameEngine {
   /// Breaks an unending loop by distributing up to 5 cards randomly to each of the two players
   /// from the previously played cards (completed rounds).
   MoveResult distributeNewCards(GameState state) {
-    if (!state.unendingLoopDetected || state.players.length != 2) {
+    final activePlayers = state.players.where((p) => !state.finishedPlayerIds.contains(p.id)).toList();
+    if (!state.unendingLoopDetected || activePlayers.length != 2) {
       return MoveResult(
         gameState: state,
         moveType: MoveType.invalidMove,
@@ -297,12 +300,16 @@ class GameEngine {
 
     List<Player> newPlayers = List.from(state.players);
 
-    // Distribute up to 5 cards to each player
+    // Distribute up to 5 cards to each of the 2 active players
     int cardsToGive = pool.length >= 10 ? 5 : pool.length ~/ 2;
     if (cardsToGive == 0 && pool.isNotEmpty) cardsToGive = 1;
 
     for (int i = 0; i < 2; i++) {
-      List<PlayingCard> newHand = List.from(newPlayers[i].hand);
+      final activePlayer = activePlayers[i];
+      final playerIdx = newPlayers.indexWhere((p) => p.id == activePlayer.id);
+      if (playerIdx == -1) continue;
+      
+      List<PlayingCard> newHand = List.from(newPlayers[playerIdx].hand);
       for (int c = 0; c < cardsToGive; c++) {
         if (pool.isNotEmpty) {
           newHand.add(pool.removeLast());
@@ -315,12 +322,12 @@ class GameEngine {
         }
         return a.rank.index.compareTo(b.rank.index);
       });
-      newPlayers[i] = newPlayers[i].copyWith(hand: newHand);
+      newPlayers[playerIdx] = newPlayers[playerIdx].copyWith(hand: newHand);
     }
 
     MoveHistory newHistory = state.history.record(
       'system',
-      'Unending loop resolved: Distributed $cardsToGive new cards to both players.',
+      'Unending loop resolved: Distributed $cardsToGive new cards to both remaining active players.',
     );
 
     return MoveResult(

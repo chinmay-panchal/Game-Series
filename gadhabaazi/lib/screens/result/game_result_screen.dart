@@ -10,7 +10,7 @@ import '../../widgets/animated_background.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_strings.dart';
 import '../home/home_screen.dart';
-import '../online/online_game_screen.dart';
+import '../online/waiting_room_screen.dart';
 import '../../engine/history/move_history.dart';
 
 class GameResultScreen extends StatefulWidget {
@@ -60,9 +60,11 @@ class _GameResultScreenState extends State<GameResultScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  const Text(
-                    "🐴",
-                    style: TextStyle(fontSize: 80),
+                  Image.asset(
+                    'assets/images/donkey_gif.jpg',
+                    width: 120,
+                    height: 120,
+                    fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -133,7 +135,7 @@ class _GameResultScreenState extends State<GameResultScreen> {
                       onPressed: () {
                         context.read<OnlineBloc>().add(OnlineRestartRoom());
                         Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(builder: (_) => const OnlineGameScreen()),
+                          MaterialPageRoute(builder: (_) => const WaitingRoomScreen()),
                           (route) => false,
                         );
                       },

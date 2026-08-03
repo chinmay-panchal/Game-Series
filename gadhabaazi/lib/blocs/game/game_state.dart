@@ -25,6 +25,7 @@ class GameDealing extends GameBlocState {
 class GamePlayerTurn extends GameBlocState {
   final Player activePlayer;
   final List<Player> otherPlayers;
+  final Map<String, String> playerNames;
   final RoundModel? currentRound;
   final Suit? currentSuit;
   final PlayedCard? highestCard;
@@ -35,6 +36,7 @@ class GamePlayerTurn extends GameBlocState {
   const GamePlayerTurn({
     required this.activePlayer,
     required this.otherPlayers,
+    required this.playerNames,
     this.currentRound,
     this.currentSuit,
     this.highestCard,
@@ -44,7 +46,7 @@ class GamePlayerTurn extends GameBlocState {
   });
 
   @override
-  List<Object?> get props => [activePlayer, otherPlayers, currentRound, currentSuit, highestCard, isHandRevealed, isFirstTurn, unendingLoopDetected];
+  List<Object?> get props => [activePlayer, otherPlayers, playerNames, currentRound, currentSuit, highestCard, isHandRevealed, isFirstTurn, unendingLoopDetected];
 }
 
 class GamePunishmentSelection extends GameBlocState {
@@ -63,14 +65,16 @@ class GamePunishmentSelection extends GameBlocState {
 class GameRoundCompleted extends GameBlocState {
   final String nextRoundLeaderName;
   final RoundModel completedRound;
+  final Map<String, String> playerNames;
 
   const GameRoundCompleted({
     required this.nextRoundLeaderName,
     required this.completedRound,
+    required this.playerNames,
   });
 
   @override
-  List<Object?> get props => [nextRoundLeaderName, completedRound];
+  List<Object?> get props => [nextRoundLeaderName, completedRound, playerNames];
 }
 
 class GameFinished extends GameBlocState {

@@ -28,10 +28,13 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   String? _lastActivePlayer;
   int _hostDisconnectSeconds = 0;
   Timer? _hostDisconnectTimer;
+  Timer? _roundCompleteTimer;
+  bool _autoRedistributeDispatched = false;
 
   @override
   void dispose() {
     _hostDisconnectTimer?.cancel();
+    _roundCompleteTimer?.cancel();
     super.dispose();
   }
 
@@ -55,11 +58,13 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         if (curr is OnlineError) return true;
         if (curr is OnlineRoundCompleted) return true;
         if (curr is OnlineGameFinished) return true;
-        if (curr is OnlinePlayerTurn || curr is OnlineWaitingForTurn) {
-          final name = curr is OnlinePlayerTurn
-              ? (curr as OnlinePlayerTurn).activePlayerName
-              : (curr as OnlineWaitingForTurn).activePlayerName;
-          return _lastActivePlayer != name;
+        if (curr is OnlinePlayerTurn) {
+          // Always fire when unendingLoopDetected becomes true so we can auto-redistribute
+          if (curr.unendingLoopDetected) return true;
+          return _lastActivePlayer != curr.activePlayerName;
+        }
+        if (curr is OnlineWaitingForTurn) {
+          return _lastActivePlayer != curr.activePlayerName;
         }
         return false;
       },
@@ -67,23 +72,59 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         if (state is OnlineError) {
           PremiumToast.show(context, state.message, isError: true);
         } else if (state is OnlineRoundCompleted) {
-          // Show punishment toast ONLY to the player who received it
+          // ── Auto-advance to next round after a brief pause ──
+          _roundCompleteTimer?.cancel();
+          if (state.isHost) {
+            _roundCompleteTimer = Timer(const Duration(seconds: 2), () {
+              if (mounted) {
+                context.read<OnlineBloc>().add(OnlineStartNextRound());
+              }
+            });
+          }
+
+          // ── Punishment toast ──
           final myUid = context.read<OnlineBloc>().myUid;
-          if (state.punishmentCard != null &&
-              state.punishmentReceiverUid != null &&
-              myUid == state.punishmentReceiverUid) {
-            final card = state.punishmentCard!;
-            PremiumToast.show(
-              context,
-              '🎴 You got punished with ${card.rank.label}${card.suit.symbol}! It is added to your hand.',
-              isError: true,
-              duration: const Duration(seconds: 5),
-            );
+          if (state.punishmentCard != null && state.punishmentReceiverUid != null) {
+            final punisherEngineId = state.completedRound.winnerId;
+            final punisherName = punisherEngineId != null ? state.playerNames[punisherEngineId] ?? 'Someone' : 'Someone';
+
+            if (myUid == state.punishmentReceiverUid) {
+              final card = state.punishmentCard!;
+              PremiumToast.show(
+                context,
+                '🎴 $punisherName punished you with ${card.rank.label}${card.suit.symbol}!',
+                isError: true,
+                duration: const Duration(seconds: 5),
+              );
+            } else {
+              PremiumToast.show(
+                context,
+                '🎴 $punisherName punished ${state.punishmentReceiverName}!',
+                isError: true,
+                duration: const Duration(seconds: 4),
+              );
+            }
           }
         } else if (state is OnlinePlayerTurn) {
-          // Check if any player is disconnected - show countdown for host reassignment
+          // ── Auto-redistribute when loop detected (host only) ──
+          if (state.unendingLoopDetected && state.isHost && !_autoRedistributeDispatched) {
+            _autoRedistributeDispatched = true;
+            context.read<OnlineBloc>().add(OnlineDistributeNewCards());
+            PremiumToast.show(
+              context,
+              '🂯 Too few cards in play — redistributing cards to both players!',
+              duration: const Duration(seconds: 4),
+            );
+            return;
+          }
+
+          // Reset flag once loop is resolved
+          if (!state.unendingLoopDetected) {
+            _autoRedistributeDispatched = false;
+          }
+
+          // ── Disconnect countdown ──
           final allPlayers = state.allPlayers;
-          // If any player is offline, start countdown
           final offlineHost = allPlayers.firstWhere(
             (p) => !p.isOnline,
             orElse: () => allPlayers.first,
@@ -104,6 +145,7 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
           PremiumToast.show(context, "${state.activePlayerName}'s Turn");
           if (_selectedCard != null) setState(() => _selectedCard = null);
         } else if (state is OnlineGameFinished) {
+          _roundCompleteTimer?.cancel();
           Navigator.of(context).pushReplacement(MaterialPageRoute(
             builder: (_) => GameResultScreen(
               donkeyName: state.donkeyName,
@@ -115,9 +157,6 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         }
       },
       builder: (context, state) {
-        final showRedistribute = state is OnlinePlayerTurn &&
-            state.unendingLoopDetected &&
-            state.isHost;
         return Scaffold(
           body: Stack(
             children: [
@@ -136,39 +175,7 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                   ),
                 ),
               ),
-              // ── Floating redistribute button (right-center / 3 PM position) ──
-              if (showRedistribute)
-                Positioned(
-                  right: 16,
-                  top: 0,
-                  bottom: 0,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Tooltip(
-                      message: 'Redistribute Cards',
-                      child: Material(
-                        color: Colors.white,
-                        shape: const CircleBorder(),
-                        elevation: 6,
-                        shadowColor: Colors.black45,
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: () => context
-                              .read<OnlineBloc>()
-                              .add(OnlineDistributeNewCards()),
-                          child: const Padding(
-                            padding: EdgeInsets.all(14),
-                            child: Icon(
-                              Icons.loop_rounded,
-                              color: Color(0xFF1A1A2E),
-                              size: 26,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+              // ── No manual redistribute button — fully automatic ──
               // ── Host Disconnect Countdown Banner ──
               if (_hostDisconnectSeconds > 0)
                 Positioned(
@@ -403,18 +410,21 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
       return TableCenterWidget(
         currentRound: state.currentRound,
         highestCard: state.highestCard,
+        playerNames: state.playerNames,
       );
     }
     if (state is OnlineWaitingForTurn) {
       return TableCenterWidget(
         currentRound: state.currentRound,
         highestCard: null,
+        playerNames: state.playerNames,
       );
     }
     if (state is OnlineRoundCompleted) {
       return TableCenterWidget(
         currentRound: state.completedRound,
         highestCard: null,
+        playerNames: state.playerNames,
       );
     }
     return const SizedBox(height: 220);
@@ -423,23 +433,28 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   // ─── Bottom Area ──────────────────────────────────────────────────────────
 
   Widget _buildBottomArea(BuildContext context, OnlineState state) {
-    if (state is OnlineRoundCompleted && state.isHost) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 32),
-        child: ElevatedButton(
-          onPressed: () =>
-              context.read<OnlineBloc>().add(OnlineStartNextRound()),
-          child: const Text('Next Round'),
-        ),
-      );
-    }
-
-    if (state is OnlineRoundCompleted && !state.isHost) {
+    // Both host and guests see the same auto-advancing indicator
+    if (state is OnlineRoundCompleted) {
       return const Padding(
         padding: EdgeInsets.only(bottom: 32),
-        child: Text(
-          'Waiting for host to start next round…',
-          style: TextStyle(color: Colors.white38, fontSize: 14),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white38,
+              ),
+            ),
+            SizedBox(width: 10),
+            Text(
+              'Starting next round…',
+              style: TextStyle(color: Colors.white38, fontSize: 14),
+            ),
+          ],
         ),
       );
     }

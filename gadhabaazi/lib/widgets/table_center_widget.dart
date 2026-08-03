@@ -7,11 +7,13 @@ import 'dart:math';
 class TableCenterWidget extends StatefulWidget {
   final RoundModel? currentRound;
   final PlayedCard? highestCard;
+  final Map<String, String>? playerNames;
 
   const TableCenterWidget({
     super.key,
     required this.currentRound,
     this.highestCard,
+    this.playerNames,
   });
 
   @override
@@ -54,6 +56,7 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
             children: List.generate(total, (index) {
               final pc = playedCards[index];
               final isHighest = pc == widget.highestCard;
+              final displayName = widget.playerNames?[pc.playerId] ?? pc.playerId;
 
               final random = Random(pc.playerId.hashCode ^ pc.card.hashCode);
               final angle = _isHoveredOrTapped ? 0.0 : ((random.nextDouble() * 0.5) - 0.25);
@@ -88,7 +91,7 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
-                              pc.playerId,
+                              displayName,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 10,

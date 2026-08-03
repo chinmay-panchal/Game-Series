@@ -56,6 +56,7 @@ class OnlinePlayerTurn extends OnlineState {
   final Suit? currentSuit;
   final PlayedCard? highestCard;
   final List<OnlinePlayerModel> allPlayers;
+  final Map<String, String> playerNames;
   final bool isFirstTurn;
   final bool isHost;
   final bool unendingLoopDetected;
@@ -66,6 +67,7 @@ class OnlinePlayerTurn extends OnlineState {
     required this.isMyTurn,
     required this.myHand,
     required this.allPlayers,
+    required this.playerNames,
     required this.isHost,
     this.currentRound,
     this.currentSuit,
@@ -84,6 +86,7 @@ class OnlinePlayerTurn extends OnlineState {
         currentSuit,
         highestCard,
         allPlayers,
+        playerNames,
         isHost,
         isFirstTurn,
         unendingLoopDetected,
@@ -93,6 +96,7 @@ class OnlinePlayerTurn extends OnlineState {
 class OnlineRoundCompleted extends OnlineState {
   final String nextRoundLeaderName;
   final RoundModel completedRound;
+  final Map<String, String> playerNames;
   final bool isHost;
   // Punishment info — non-null when this round ended via punishment
   final PlayingCard? punishmentCard;
@@ -102,6 +106,7 @@ class OnlineRoundCompleted extends OnlineState {
   const OnlineRoundCompleted({
     required this.nextRoundLeaderName,
     required this.completedRound,
+    required this.playerNames,
     required this.isHost,
     this.punishmentCard,
     this.punishmentReceiverName,
@@ -109,7 +114,7 @@ class OnlineRoundCompleted extends OnlineState {
   });
 
   @override
-  List<Object?> get props => [nextRoundLeaderName, completedRound, isHost, punishmentCard, punishmentReceiverName, punishmentReceiverUid];
+  List<Object?> get props => [nextRoundLeaderName, completedRound, playerNames, isHost, punishmentCard, punishmentReceiverName, punishmentReceiverUid];
 }
 
 class OnlinePunishmentNeeded extends OnlineState {
@@ -144,14 +149,16 @@ class OnlineWaitingForTurn extends OnlineState {
   final List<PlayingCard> myHand;
   final RoundModel? currentRound;
   final List<OnlinePlayerModel> allPlayers;
+  final Map<String, String> playerNames;
 
   const OnlineWaitingForTurn({
     required this.activePlayerName,
     required this.myHand,
     required this.allPlayers,
+    required this.playerNames,
     this.currentRound,
   });
 
   @override
-  List<Object?> get props => [activePlayerName, myHand, currentRound, allPlayers];
+  List<Object?> get props => [activePlayerName, myHand, currentRound, allPlayers, playerNames];
 }
