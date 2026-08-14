@@ -162,3 +162,13 @@ class OnlineWaitingForTurn extends OnlineState {
   @override
   List<Object?> get props => [activePlayerName, myHand, currentRound, allPlayers, playerNames];
 }
+
+class OnlineRedistributingCards extends OnlineState {
+  final String disconnectedPlayerName;
+
+  const OnlineRedistributingCards({required this.disconnectedPlayerName});
+
+  @override
+  List<Object?> get props => [disconnectedPlayerName];
+}
+

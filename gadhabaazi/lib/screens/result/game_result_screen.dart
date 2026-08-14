@@ -12,6 +12,7 @@ import '../../core/constants/app_strings.dart';
 import '../home/home_screen.dart';
 import '../online/waiting_room_screen.dart';
 import '../../engine/history/move_history.dart';
+import '../../services/audio_service.dart';
 
 class GameResultScreen extends StatefulWidget {
   final String donkeyName;
@@ -39,12 +40,20 @@ class _GameResultScreenState extends State<GameResultScreen> {
     super.initState();
     _confettiController = ConfettiController(duration: const Duration(seconds: 3));
     _confettiController.play();
+    
+    // Play ending sound
+    AudioService().playEndingBgm();
   }
 
   @override
   void dispose() {
     _confettiController.dispose();
     super.dispose();
+  }
+
+  void _onExit() {
+    AudioService().stopBgm();
+    AudioService().playTapSound();
   }
 
   @override
@@ -60,54 +69,55 @@ class _GameResultScreenState extends State<GameResultScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Image.asset(
-                    'assets/images/donkey_gif.jpg',
-                    width: 120,
-                    height: 120,
-                    fit: BoxFit.contain,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    "Donkey",
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: AppColors.goldAccent,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    widget.donkeyName,
-                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                      color: AppColors.white,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 48),
-                  const Text(
-                    "Finishing Order:",
-                    style: TextStyle(color: AppColors.textSecondary, fontSize: 18),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                  ...widget.finishingOrder.asMap().entries.map((entry) {
-                    int rank = entry.key + 1;
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Text(
-                        "$rank. ${entry.value}",
-                        style: TextStyle(
-                          color: rank == widget.finishingOrder.length ? AppColors.redCard : AppColors.white,
-                          fontSize: 20,
-                          fontWeight: rank == 1 ? FontWeight.bold : FontWeight.normal,
-                        ),
-                        textAlign: TextAlign.center,
+                  // Wooden Name Plate with ending.png
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Image.asset(
+                        'assets/images/ending.png',
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        fit: BoxFit.contain,
                       ),
-                    );
-                  }),
+                      // Position the name over the wooden plank area (lower 22% of the image)
+                      Positioned.fill(
+                        child: FractionallySizedBox(
+                          alignment: Alignment.bottomCenter,
+                          heightFactor: 0.22,
+                          child: Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 20),
+                                child: Text(
+                                  widget.donkeyName.toUpperCase(),
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Color(0xFFFACC15),
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.bold,
+                                    fontFamily: 'serif',
+                                    letterSpacing: 3,
+                                    shadows: [
+                                      Shadow(
+                                        color: Colors.black87,
+                                        blurRadius: 4,
+                                        offset: Offset(2, 2),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  
                   const SizedBox(height: 60),
                   ElevatedButton(
                     onPressed: () {
+                      _onExit();
                       context.read<GameBloc>().add(RestartGame());
                       // If it's an online game, also dispatch leave room
                       final onlineBloc = context.read<OnlineBloc>();
@@ -119,20 +129,29 @@ class _GameResultScreenState extends State<GameResultScreen> {
                         (route) => false,
                       );
                     },
-                    child: const Text(AppStrings.playAgain),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
+                      backgroundColor: const Color(0xFFC2C8A4),
+                      foregroundColor: const Color(0xFF2C1A0E),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(AppStrings.playAgain, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   ),
                   if (widget.isOnlineRoom) ...[
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
                       icon: const Icon(Icons.replay_rounded),
-                      label: const Text('Replay in Same Room'),
+                      label: const Text('Replay in Same Room', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF3A6FF7),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        foregroundColor: const Color(0xFFC2C8A4),
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                       onPressed: () {
+                        _onExit();
                         context.read<OnlineBloc>().add(OnlineRestartRoom());
                         Navigator.of(context).pushAndRemoveUntil(
                           MaterialPageRoute(builder: (_) => const WaitingRoomScreen()),

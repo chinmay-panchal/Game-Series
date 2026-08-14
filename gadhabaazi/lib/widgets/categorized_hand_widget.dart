@@ -102,7 +102,7 @@ class _CategorizedHandWidgetState extends State<CategorizedHandWidget> {
                   color: isSelected ? AppColors.goldAccent : AppColors.black.withAlpha(100),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: isSelected ? AppColors.white : Colors.transparent,
+                    color: isSelected ? const Color(0xFFC2C8A4) : Colors.transparent,
                     width: 2,
                   ),
                 ),
@@ -116,7 +116,7 @@ class _CategorizedHandWidgetState extends State<CategorizedHandWidget> {
                             ? AppColors.textSecondary.withAlpha(100)
                             : isSelected
                                 ? AppColors.black
-                                : (isRed ? AppColors.redCard : AppColors.white),
+                                : (isRed ? AppColors.redCard : const Color(0xFFC2C8A4)),
                       ),
                     ),
                     if (count > 0) ...[
@@ -126,7 +126,7 @@ class _CategorizedHandWidgetState extends State<CategorizedHandWidget> {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
-                          color: isSelected ? AppColors.black : AppColors.white,
+                          color: isSelected ? AppColors.black : const Color(0xFFC2C8A4),
                         ),
                       ),
                     ]
@@ -141,7 +141,7 @@ class _CategorizedHandWidgetState extends State<CategorizedHandWidget> {
         SizedBox(
           height: 160,
           child: filteredCards.isEmpty
-              ? const Center(child: Text("No cards in this suit", style: TextStyle(color: Colors.white54)))
+              ? const Center(child: Text("No cards in this suit", style: TextStyle(color: const Color(0x8AC2C8A4))))
               : ListView.builder(
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),

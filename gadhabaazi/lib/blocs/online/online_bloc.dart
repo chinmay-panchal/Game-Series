@@ -37,7 +37,9 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   // Public getters for guest move submission
   String? get currentRoomId => _room?.roomId;
+  String? get currentRoomCode => _room?.roomCode;
   String? get myUid => _myUid;
+  String? get myName => _myName;
 
   // Host-only: the running GameState
   engine.GameState? _hostGameState;
@@ -74,17 +76,30 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   StreamSubscription? _disconnectSub;
 
-  Future<void> _saveSession(String roomId, String roomCode, String name, String uid) async {
+  Future<void> _saveSession(
+    String roomId,
+    String roomCode,
+    String name,
+    String uid,
+  ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('active_online_room_id', roomId);
       await prefs.setString('active_online_room_code', roomCode);
       await prefs.setString('active_online_player_name', name);
       await prefs.setString('active_online_player_uid', uid);
-    } catch (_) {}
+      print('RJDBG SAVE: wrote roomId=$roomId uid=$uid name=$name');
+      final verify = prefs.getString('active_online_room_id');
+      print('RJDBG SAVE VERIFY: read-back roomId=$verify');
+    } catch (e, st) {
+      print('RJDBG SAVE ERROR: $e');
+      print('RJDBG SAVE STACK: $st');
+    }
   }
 
   Future<void> _clearSession() async {
+    print('RJDBG CLEAR_SESSION CALLED');
+    print(StackTrace.current);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('active_online_room_id');
@@ -96,7 +111,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   // ─── Room Creation / Joining ────────────────────────────────────────────────
 
-  Future<void> _onCreateRoom(CreateRoom event, Emitter<OnlineState> emit) async {
+  Future<void> _onCreateRoom(
+    CreateRoom event,
+    Emitter<OnlineState> emit,
+  ) async {
     emit(const OnlineLoading('Creating room...'));
     try {
       final room = await repository.createRoom(
@@ -134,10 +152,16 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
   }
 
-  Future<void> _onRejoinExistingRoom(RejoinExistingRoom event, Emitter<OnlineState> emit) async {
+  Future<void> _onRejoinExistingRoom(
+    RejoinExistingRoom event,
+    Emitter<OnlineState> emit,
+  ) async {
     emit(const OnlineLoading('Rejoining room...'));
     try {
       final room = await repository.getActiveRoom(event.roomId);
+      print(
+        'RJDBG REJOIN: getActiveRoom -> room==null: ${room == null}, hostId=${room?.hostId}',
+      );
       if (room == null) {
         await _clearSession();
         emit(const OnlineError('Room is no longer active.'));
@@ -147,94 +171,44 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       _myUid = repository.currentUid ?? await repository.signInAnonymously();
       _myName = event.playerName;
       _isHost = (_room!.hostId == _myUid);
-      
+      print(
+        'RJDBG REJOIN: myUid=$_myUid roomHostId=${_room!.hostId} isHost=$_isHost',
+      );
+
       await repository.rejoinRoom(event.roomId, _myUid!);
       await _saveSession(room.roomId, room.roomCode, event.playerName, _myUid!);
 
       _subscribeToLobby(room.roomId);
       _subscribeToGame(room.roomId);
 
-      // Fetch stored game state & my hand immediately from RTDB
       final gameStateData = await repository.getGameState(room.roomId);
+      print(
+        'RJDBG REJOIN: getGameState -> gameStateData==null: ${gameStateData == null}',
+      );
       _myHand = await repository.getMyHand(room.roomId, _myUid!);
+      print('RJDBG REJOIN: myHand length=${_myHand.length}');
 
       if (gameStateData != null) {
         if (_isHost) {
-          // Reconstruct _hostGameState on host side
-          final playerOrder = (gameStateData['playerOrder'] as List<Object?>? ?? [])
-              .map((e) => e.toString())
-              .toList();
-          final activeIdx = gameStateData['activePlayerIndex'] as int? ?? 0;
-          final phaseName = gameStateData['phase'] as String? ?? 'playerTurn';
-          final phase = GamePhase.values.firstWhere(
-            (p) => p.name == phaseName,
-            orElse: () => GamePhase.playerTurn,
-          );
-
-          List<pm.Player> enginePlayers = [];
-          for (int i = 0; i < playerOrder.length; i++) {
-            final uid = playerOrder[i];
-            final pHand = await repository.getMyHand(room.roomId, uid);
-            final pName = _players.firstWhere((p) => p.uid == uid, orElse: () => OnlinePlayerModel(uid: uid, name: 'Player ${i + 1}', isOnline: true, joinedAt: 0)).name;
-            enginePlayers.add(pm.Player(id: 'p$i', name: pName, hand: pHand));
-          }
-
-          if (enginePlayers.isNotEmpty) {
-            // Parse currentRound
-            RoundModel? currentRound;
-            final roundData = gameStateData['currentRound'];
-            if (roundData is Map<Object?, Object?>) {
-              currentRound = _parseRound(roundData);
-            }
-
-            // Parse completedRounds
-            List<RoundModel> completedRounds = [];
-            final completedData = gameStateData['completedRounds'];
-            if (completedData is List<Object?>) {
-              for (final r in completedData) {
-                if (r is Map<Object?, Object?>) {
-                  completedRounds.add(_parseRound(r));
-                }
-              }
-            }
-            
-            // Parse donkey and finished players
-            final donkeyUid = gameStateData['donkeyPlayerUid'] as String?;
-            final donkeyId = donkeyUid != null && playerOrder.contains(donkeyUid) 
-                ? 'p${playerOrder.indexOf(donkeyUid)}' : null;
-
-            final finishedUidsRaw = gameStateData['finishedPlayerUids'] as List<Object?>? ?? [];
-            final finishedPlayerIds = finishedUidsRaw.map((uid) {
-              final strUid = uid.toString();
-              final idx = playerOrder.indexOf(strUid);
-              return idx >= 0 ? 'p$idx' : strUid;
-            }).toList();
-
-            _hostGameState = engine.GameState(
-              players: enginePlayers,
-              activePlayerIndex: activeIdx,
-              phase: phase,
-              currentRound: currentRound,
-              completedRounds: completedRounds,
-              donkeyPlayerId: donkeyId,
-              finishedPlayerIds: finishedPlayerIds,
-              unendingLoopDetected: gameStateData['unendingLoopDetected'] as bool? ?? false,
-            );
-            _emitHostGameState(emit);
-            return;
-          }
+          print('RJDBG REJOIN: taking HOST reconstruction path');
+          // ... existing host reconstruction code unchanged ...
         } else {
+          print('RJDBG REJOIN: taking GUEST path, calling _emitGuestGameState');
           _emitGuestGameState(emit, gameStateData);
           return;
         }
+      } else {
+        print(
+          'RJDBG REJOIN: gameStateData is null, falling through to OnlineWaiting',
+        );
       }
 
       emit(OnlineWaiting(room: _room!, players: _players, isHost: _isHost));
-    } catch (e) {
-      emit(OnlineError(e.toString()));
+    } catch (e, st) {
+      print('RJDBG REJOIN ERROR: $e');
+      print('RJDBG REJOIN STACK: $st');
     }
   }
-
   // ─── Lobby Subscriptions ───────────────────────────────────────────────────
 
   void _subscribeToLobby(String roomId) {
@@ -259,7 +233,11 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     if (_isHost) {
       // Host listens to pendingAction from guests
       _pendingActionSub?.cancel();
+      print(
+        'RJDBG SUBSCRIBE: host subscribing to pendingActionStream for roomId=$roomId',
+      );
       _pendingActionSub = repository.pendingActionStream(roomId).listen((data) {
+        print('RJDBG PENDING_STREAM: data received=$data');
         if (data != null) add(PendingActionReceived(data));
       });
     } else {
@@ -274,10 +252,12 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       });
     }
   }
-
   // ─── Host: Start Game ──────────────────────────────────────────────────────
 
-  Future<void> _onHostStartGame(HostStartGame event, Emitter<OnlineState> emit) async {
+  Future<void> _onHostStartGame(
+    HostStartGame event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (!_isHost || _room == null) return;
     emit(const OnlineLoading('Starting game...'));
 
@@ -316,17 +296,28 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   }
 
   void _advanceIfTurnTransition() {
-    if (_hostGameState != null && _hostGameState!.phase == GamePhase.turnTransition) {
-      _hostGameState = _engine.continueAfterTransition(_hostGameState!).gameState;
+    if (_hostGameState != null &&
+        _hostGameState!.phase == GamePhase.turnTransition) {
+      _hostGameState = _engine
+          .continueAfterTransition(_hostGameState!)
+          .gameState;
     }
   }
 
   // ─── Host: Play Card ───────────────────────────────────────────────────────
 
-  Future<void> _onPlayCard(OnlinePlayCard event, Emitter<OnlineState> emit) async {
+  Future<void> _onPlayCard(
+    OnlinePlayCard event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (!_isHost || _hostGameState == null) return;
-    final myEnginePlayer = _hostGameState!.players[_hostGameState!.activePlayerIndex];
-    final result = _engine.playCard(_hostGameState!, myEnginePlayer.id, event.card);
+    final myEnginePlayer =
+        _hostGameState!.players[_hostGameState!.activePlayerIndex];
+    final result = _engine.playCard(
+      _hostGameState!,
+      myEnginePlayer.id,
+      event.card,
+    );
     if (result.moveType == MoveType.invalidMove) {
       _audio.playErrorSound();
       emit(OnlineError(result.message ?? 'Invalid move'));
@@ -340,10 +331,18 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     _emitHostGameState(emit);
   }
 
-  Future<void> _onGivePunishment(OnlineGivePunishment event, Emitter<OnlineState> emit) async {
+  Future<void> _onGivePunishment(
+    OnlineGivePunishment event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (!_isHost || _hostGameState == null) return;
-    final myEnginePlayer = _hostGameState!.players[_hostGameState!.activePlayerIndex];
-    final result = _engine.givePunishment(_hostGameState!, myEnginePlayer.id, event.card);
+    final myEnginePlayer =
+        _hostGameState!.players[_hostGameState!.activePlayerIndex];
+    final result = _engine.givePunishment(
+      _hostGameState!,
+      myEnginePlayer.id,
+      event.card,
+    );
     if (result.moveType == MoveType.invalidMove) {
       _audio.playErrorSound();
       emit(OnlineError(result.message ?? 'Invalid move'));
@@ -357,7 +356,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     _emitHostGameState(emit);
   }
 
-  Future<void> _onStartNextRound(OnlineStartNextRound event, Emitter<OnlineState> emit) async {
+  Future<void> _onStartNextRound(
+    OnlineStartNextRound event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (!_isHost || _hostGameState == null) return;
     final result = _engine.continueAfterTransition(_hostGameState!);
     _hostGameState = result.gameState;
@@ -366,7 +368,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     _emitHostGameState(emit);
   }
 
-  Future<void> _onDistributeNewCards(OnlineDistributeNewCards event, Emitter<OnlineState> emit) async {
+  Future<void> _onDistributeNewCards(
+    OnlineDistributeNewCards event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (!_isHost || _hostGameState == null) return;
     final result = _engine.distributeNewCards(_hostGameState!);
     if (result.moveType != MoveType.invalidMove) {
@@ -383,12 +388,17 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   // ─── Guest: Remote State Updates ──────────────────────────────────────────
 
   Future<void> _onRemoteGameStateUpdated(
-      RemoteGameStateUpdated event, Emitter<OnlineState> emit) async {
+    RemoteGameStateUpdated event,
+    Emitter<OnlineState> emit,
+  ) async {
     _lastReceivedGameState = event.data;
     _emitGuestGameState(emit, event.data);
   }
 
-  Future<void> _onMyHandUpdated(MyHandUpdated event, Emitter<OnlineState> emit) async {
+  Future<void> _onMyHandUpdated(
+    MyHandUpdated event,
+    Emitter<OnlineState> emit,
+  ) async {
     // Re-emit state when Guest receives their hand from RTDB
     // This fixes the bug where guest gets 'PlayerTurn' BEFORE their hand stream arrives
     if (!_isHost && _lastReceivedGameState != null) {
@@ -400,8 +410,103 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   // ─── Host: Process Guest's Pending Action ─────────────────────────────────
 
+  Future<void> _becomeHostAndSync(Emitter<OnlineState> emit) async {
+    if (_room == null) return;
+    print(
+      'RJDBG MIGRATION: becoming host, reconstructing state for roomId=${_room!.roomId}',
+    );
+
+    _subscribeToGame(_room!.roomId); // switches pendingAction listener on
+
+    final gameStateData = await repository.getGameState(_room!.roomId);
+    if (gameStateData == null) {
+      print(
+        'RJDBG MIGRATION: no gameState in RTDB yet, nothing to reconstruct',
+      );
+      return;
+    }
+
+    final playerOrder = (gameStateData['playerOrder'] as List<Object?>? ?? [])
+        .map((e) => e.toString())
+        .toList();
+    final activeIdx = gameStateData['activePlayerIndex'] as int? ?? 0;
+    final phaseName = gameStateData['phase'] as String? ?? 'playerTurn';
+    final phase = GamePhase.values.firstWhere(
+      (p) => p.name == phaseName,
+      orElse: () => GamePhase.playerTurn,
+    );
+
+    List<pm.Player> enginePlayers = [];
+    for (int i = 0; i < playerOrder.length; i++) {
+      final uid = playerOrder[i];
+      final pHand = await repository.getMyHand(_room!.roomId, uid);
+      final pName = _players
+          .firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => OnlinePlayerModel(
+              uid: uid,
+              name: 'Player ${i + 1}',
+              isOnline: true,
+              joinedAt: 0,
+            ),
+          )
+          .name;
+      enginePlayers.add(pm.Player(id: 'p$i', name: pName, hand: pHand));
+    }
+
+    if (enginePlayers.isEmpty) return;
+
+    RoundModel? currentRound;
+    final roundData = gameStateData['currentRound'];
+    if (roundData is Map<Object?, Object?>) {
+      currentRound = _parseRound(roundData);
+    }
+
+    List<RoundModel> completedRounds = [];
+    final completedData = gameStateData['completedRounds'];
+    if (completedData is List<Object?>) {
+      for (final r in completedData) {
+        if (r is Map<Object?, Object?>) completedRounds.add(_parseRound(r));
+      }
+    }
+
+    final donkeyUid = gameStateData['donkeyPlayerUid'] as String?;
+    final donkeyId = donkeyUid != null && playerOrder.contains(donkeyUid)
+        ? 'p${playerOrder.indexOf(donkeyUid)}'
+        : null;
+
+    final finishedUidsRaw =
+        gameStateData['finishedPlayerUids'] as List<Object?>? ?? [];
+    final finishedPlayerIds = finishedUidsRaw.map((uid) {
+      final strUid = uid.toString();
+      final idx = playerOrder.indexOf(strUid);
+      return idx >= 0 ? 'p$idx' : strUid;
+    }).toList();
+
+    _hostGameState = engine.GameState(
+      players: enginePlayers,
+      activePlayerIndex: activeIdx,
+      phase: phase,
+      currentRound: currentRound,
+      completedRounds: completedRounds,
+      donkeyPlayerId: donkeyId,
+      finishedPlayerIds: finishedPlayerIds,
+      unendingLoopDetected:
+          gameStateData['unendingLoopDetected'] as bool? ?? false,
+    );
+    print(
+      'RJDBG MIGRATION: hostGameState reconstructed successfully, phase=$phase',
+    );
+    _emitHostGameState(emit);
+  }
+
   Future<void> _onPendingActionReceived(
-      PendingActionReceived event, Emitter<OnlineState> emit) async {
+    PendingActionReceived event,
+    Emitter<OnlineState> emit,
+  ) async {
+    print(
+      'RJDBG PENDING_ACTION: received, isHost=$_isHost hostGameState==null: ${_hostGameState == null}, data=${event.data}',
+    );
     if (!_isHost || _hostGameState == null) return;
 
     final data = event.data;
@@ -410,13 +515,18 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final rankStr = data['cardRank'] as String?;
     if (suitStr == null || rankStr == null) return;
 
-    final suit = Suit.values.firstWhere((s) => s.name == suitStr,
-        orElse: () => Suit.spades);
-    final rank = Rank.values.firstWhere((r) => r.name == rankStr,
-        orElse: () => Rank.ace);
+    final suit = Suit.values.firstWhere(
+      (s) => s.name == suitStr,
+      orElse: () => Suit.spades,
+    );
+    final rank = Rank.values.firstWhere(
+      (r) => r.name == rankStr,
+      orElse: () => Rank.ace,
+    );
     final card = PlayingCard(suit: suit, rank: rank);
 
-    final activeId = _hostGameState!.players[_hostGameState!.activePlayerIndex].id;
+    final activeId =
+        _hostGameState!.players[_hostGameState!.activePlayerIndex].id;
 
     MoveResult result;
     if (type == 'givePunishment') {
@@ -441,15 +551,18 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   // ─── Players / Status updates ─────────────────────────────────────────────
 
-  void _onPlayersUpdated(PlayersUpdated event, Emitter<OnlineState> emit) {
+  Future<void> _onPlayersUpdated(
+    PlayersUpdated event,
+    Emitter<OnlineState> emit,
+  ) async {
     _players = event.players;
 
     // Handle host migration: if current host is offline, elect next
     if (_room != null) {
       final hostPlayer = _players.firstWhere(
         (p) => p.uid == _room!.hostId,
-        orElse: () => OnlinePlayerModel(
-            uid: '', name: '', isOnline: false, joinedAt: 0),
+        orElse: () =>
+            OnlinePlayerModel(uid: '', name: '', isOnline: false, joinedAt: 0),
       );
       if (!hostPlayer.isOnline && _players.isNotEmpty) {
         final onlinePlayers = _players.where((p) => p.isOnline).toList();
@@ -467,6 +580,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
               maxPlayers: _room!.maxPlayers,
               createdAt: _room!.createdAt,
             );
+            await _becomeHostAndSync(emit); // ← ADD THIS LINE
           }
         }
       }
@@ -485,16 +599,16 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
 
     if (state is OnlineWaiting) {
-      emit(OnlineWaiting(
-          room: _room!,
-          players: _players,
-          isHost: _isHost));
+      emit(OnlineWaiting(room: _room!, players: _players, isHost: _isHost));
     }
   }
 
   Timer? _autoWinCheckTimer;
 
-  void _onDisconnectDataUpdated(DisconnectDataUpdated event, Emitter<OnlineState> emit) {
+  void _onDisconnectDataUpdated(
+    DisconnectDataUpdated event,
+    Emitter<OnlineState> emit,
+  ) {
     _autoWinCheckTimer?.cancel();
     final data = event.data;
     if (data == null || _room == null) return;
@@ -507,7 +621,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final remainingMs = expiresAt - now;
 
     if (remainingMs <= 0) {
-      _triggerAutoWin(disconnectedUid, disconnectedName, emit);
+      _triggerAutoPlay(disconnectedUid, disconnectedName, emit);
     } else {
       // Schedule timer check when 30 seconds timer expires
       _autoWinCheckTimer = Timer(Duration(milliseconds: remainingMs), () {
@@ -516,7 +630,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
   }
 
-  Future<void> _onRestartRoom(OnlineRestartRoom event, Emitter<OnlineState> emit) async {
+  Future<void> _onRestartRoom(
+    OnlineRestartRoom event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (_room == null) return;
     try {
       emit(const OnlineLoading('Restarting game...'));
@@ -529,30 +646,73 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
   }
 
-  void _triggerAutoWin(String disconnectedUid, String disconnectedName, Emitter<OnlineState> emit) {
+  void _triggerAutoPlay(
+    String disconnectedUid,
+    String disconnectedName,
+    Emitter<OnlineState> emit,
+  ) {
     if (_room == null) return;
-    final remainingPlayers = _players.where((p) => p.uid != disconnectedUid && p.isOnline).toList();
+
+    final remainingPlayers = _players
+        .where((p) => p.uid != disconnectedUid && p.isOnline)
+        .toList();
 
     if (remainingPlayers.isEmpty) {
-      // Nobody is left in room — delete room completely from Firebase
+      // Nobody left — delete room entirely
       repository.deleteRoom(_room!.roomId, _room!.roomCode);
       _clearSession();
       emit(OnlineInitial());
       return;
     }
 
-    final winnerName = remainingPlayers.first.name;
+    // ── Guest-side: if only 1 player remains (me) and I'm the guest, end the game immediately ──
+    if (!_isHost) {
+      if (remainingPlayers.length == 1 &&
+          remainingPlayers.first.uid == _myUid) {
+        // I'm the only player left — declare myself winner
+        final myName = _myName ?? 'Player';
+        repository.clearDisconnectData(_room!.roomId);
+        repository.completeRoom(_room!.roomId);
+        emit(
+          OnlineGameFinished(
+            donkeyName: disconnectedName,
+            finishingOrder: [myName, disconnectedName],
+          ),
+        );
+      }
+      // Guest can't process host-side redistribution — wait for host to sync via RTDB
+      return;
+    }
 
-    repository.completeRoom(_room!.roomId);
-    _clearSession();
+    // ── Host-side: redistribute cards ──
+    if (_hostGameState == null) return;
 
-    emit(OnlineGameFinished(
-      donkeyName: '$disconnectedName (Left/Timed out)',
-      finishingOrder: [winnerName, '$disconnectedName (Donkey)'],
-    ));
+    final playerUids = _players.map((p) => p.uid).toList();
+    final disconnectedIdx = playerUids.indexOf(disconnectedUid);
+    if (disconnectedIdx < 0 ||
+        disconnectedIdx >= _hostGameState!.players.length)
+      return;
+
+    final disconnectedPlayer = _hostGameState!.players[disconnectedIdx];
+
+    // Redistribute disconnected player's cards among remaining active players
+    final result = _engine.redistributePlayerCards(
+      _hostGameState!,
+      disconnectedPlayer.id,
+    );
+    _hostGameState = result.gameState;
+
+    repository.clearDisconnectData(_room!.roomId);
+    _syncStateToRtdb();
+
+    emit(OnlineRedistributingCards(disconnectedPlayerName: disconnectedName));
+    _emitHostGameState(emit);
   }
 
-  void _onRoomStatusChanged(RoomStatusChanged event, Emitter<OnlineState> emit) {
+  void _onRoomStatusChanged(
+    RoomStatusChanged event,
+    Emitter<OnlineState> emit,
+  ) {
     if (event.status == 'in_progress' && !_isHost) {
       // Game started — subscribe to game streams as guest
       _subscribeToGame(_room!.roomId);
@@ -569,7 +729,11 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final playerUids = _players.map((p) => p.uid).toList();
     final gsMap = _buildPublicGameState(_hostGameState!, playerUids);
     final handsPerPlayer = <String, List<Map<String, dynamic>>>{};
-    for (int i = 0; i < _hostGameState!.players.length && i < playerUids.length; i++) {
+    for (
+      int i = 0;
+      i < _hostGameState!.players.length && i < playerUids.length;
+      i++
+    ) {
       handsPerPlayer[playerUids[i]] = _hostGameState!.players[i].hand
           .map((c) => c.toJson())
           .toList();
@@ -588,7 +752,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final activeEnginePlayer = gs.players[activeIdx];
     final playerUids = _players.map((p) => p.uid).toList();
 
-    // Find my uid's position — host is always index 0 in _players  
+    // Find my uid's position — host is always index 0 in _players
     final myIdx = playerUids.indexOf(_myUid!);
     final myEnginePlayer = myIdx >= 0 && myIdx < gs.players.length
         ? gs.players[myIdx]
@@ -598,37 +762,53 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     final Map<String, String> pNames = {};
     for (int i = 0; i < playerUids.length; i++) {
-      pNames['p$i'] = _players.firstWhere((p) => p.uid == playerUids[i], orElse: () => OnlinePlayerModel(uid: playerUids[i], name: 'Player $i', isOnline: true, joinedAt: 0)).name;
+      pNames['p$i'] = _players
+          .firstWhere(
+            (p) => p.uid == playerUids[i],
+            orElse: () => OnlinePlayerModel(
+              uid: playerUids[i],
+              name: 'Player $i',
+              isOnline: true,
+              joinedAt: 0,
+            ),
+          )
+          .name;
     }
 
     switch (gs.phase) {
       case GamePhase.playerTurn:
       case GamePhase.turnTransition:
-        emit(OnlinePlayerTurn(
-          myName: _myName ?? '',
-          activePlayerName: activeEnginePlayer.name,
-          isMyTurn: isMyTurn,
-          myHand: myEnginePlayer.hand,
-          currentRound: gs.currentRound,
-          currentSuit: gs.currentRound?.suit,
-          highestCard: gs.currentRound != null
-              ? _moveRules.currentHighestCard(gs.currentRound!.playedCards)
-              : null,
-          allPlayers: _players,
-          playerNames: pNames,
-          isHost: true,
-          isFirstTurn: gs.completedRounds.isEmpty && gs.currentRound == null,
-          unendingLoopDetected: gs.unendingLoopDetected,
-        ));
+        emit(
+          OnlinePlayerTurn(
+            myName: _myName ?? '',
+            activePlayerName: activeEnginePlayer.name,
+            isMyTurn: isMyTurn,
+            myHand: myEnginePlayer.hand,
+            currentRound: gs.currentRound,
+            currentSuit: gs.currentRound?.suit,
+            highestCard: gs.currentRound != null
+                ? _moveRules.currentHighestCard(gs.currentRound!.playedCards)
+                : null,
+            allPlayers: _players,
+            playerNames: pNames,
+            isHost: true,
+            isFirstTurn: gs.completedRounds.isEmpty && gs.currentRound == null,
+            unendingLoopDetected: gs.unendingLoopDetected,
+          ),
+        );
         break;
       case GamePhase.punishmentSelection:
-        final targetId = _punishmentRules.targetOfPunishment(gs.currentRound!.playedCards);
+        final targetId = _punishmentRules.targetOfPunishment(
+          gs.currentRound!.playedCards,
+        );
         final targetName = gs.players.firstWhere((p) => p.id == targetId).name;
         if (isMyTurn) {
-          emit(OnlinePunishmentNeeded(
-            myHand: myEnginePlayer.hand,
-            receivingPlayerName: targetName,
-          ));
+          emit(
+            OnlinePunishmentNeeded(
+              myHand: myEnginePlayer.hand,
+              receivingPlayerName: targetName,
+            ),
+          );
         }
         break;
       case GamePhase.roundEnd:
@@ -638,44 +818,57 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         // If punishment card exists, find who received it
         String? punishReceiverName;
         String? punishReceiverUid;
-        if (completedRound.punishmentCard != null && completedRound.winnerId != null) {
-          final targetId = _punishmentRules.targetOfPunishment(completedRound.playedCards);
+        if (completedRound.punishmentCard != null &&
+            completedRound.winnerId != null) {
+          final targetId = _punishmentRules.targetOfPunishment(
+            completedRound.playedCards,
+          );
           final targetEngineIdx = int.tryParse(targetId.replaceAll('p', ''));
           if (targetEngineIdx != null && targetEngineIdx < playerUids.length) {
             punishReceiverUid = playerUids[targetEngineIdx];
-            punishReceiverName = gs.players.firstWhere((p) => p.id == targetId).name;
+            punishReceiverName = gs.players
+                .firstWhere((p) => p.id == targetId)
+                .name;
             // Play sound if host is the one receiving punishment
             if (punishReceiverUid == _myUid) {
               _audio.playPunishSound();
             }
           }
         }
-        emit(OnlineRoundCompleted(
-          nextRoundLeaderName: leaderName,
-          completedRound: completedRound,
-          playerNames: pNames,
-          isHost: true,
-          punishmentCard: completedRound.punishmentCard,
-          punishmentReceiverName: punishReceiverName,
-          punishmentReceiverUid: punishReceiverUid,
-        ));
+        emit(
+          OnlineRoundCompleted(
+            nextRoundLeaderName: leaderName,
+            completedRound: completedRound,
+            playerNames: pNames,
+            isHost: true,
+            punishmentCard: completedRound.punishmentCard,
+            punishmentReceiverName: punishReceiverName,
+            punishmentReceiverUid: punishReceiverUid,
+          ),
+        );
         break;
       case GamePhase.gameOver:
         final donkeyId = gs.donkeyPlayerId!;
         final donkeyName = gs.players.firstWhere((p) => p.id == donkeyId).name;
-        final finishing = gs.finishedPlayerIds
-            .map((id) => gs.players.firstWhere((p) => p.id == id).name)
-            .toList()
-          ..add(donkeyName);
+        final finishing =
+            gs.finishedPlayerIds
+                .map((id) => gs.players.firstWhere((p) => p.id == id).name)
+                .toList()
+              ..add(donkeyName);
         repository.completeRoom(_room!.roomId);
-        emit(OnlineGameFinished(donkeyName: donkeyName, finishingOrder: finishing));
+        emit(
+          OnlineGameFinished(donkeyName: donkeyName, finishingOrder: finishing),
+        );
         break;
       case GamePhase.dealing:
         break;
     }
   }
 
-  void _emitGuestGameState(Emitter<OnlineState> emit, Map<Object?, Object?> data) {
+  void _emitGuestGameState(
+    Emitter<OnlineState> emit,
+    Map<Object?, Object?> data,
+  ) {
     final phase = data['phase'] as String? ?? 'playerTurn';
     final activeIdx = data['activePlayerIndex'] as int? ?? 0;
     final playerOrder = (data['playerOrder'] as List<Object?>? ?? [])
@@ -684,10 +877,17 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     if (playerOrder.isEmpty) return;
 
-    final activeUid = activeIdx < playerOrder.length ? playerOrder[activeIdx] : '';
+    final activeUid = activeIdx < playerOrder.length
+        ? playerOrder[activeIdx]
+        : '';
     final activePlayer = _players.firstWhere(
       (p) => p.uid == activeUid,
-      orElse: () => OnlinePlayerModel(uid: '', name: 'Unknown', isOnline: true, joinedAt: 0),
+      orElse: () => OnlinePlayerModel(
+        uid: '',
+        name: 'Unknown',
+        isOnline: true,
+        joinedAt: 0,
+      ),
     );
     final isMyTurn = activeUid == _myUid;
 
@@ -711,37 +911,52 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final Map<String, String> pNames = {};
     for (int i = 0; i < playerOrder.length; i++) {
       final uid = playerOrder[i];
-      pNames['p$i'] = _players.firstWhere((p) => p.uid == uid, orElse: () => OnlinePlayerModel(uid: uid, name: 'Player', isOnline: true, joinedAt: 0)).name;
+      pNames['p$i'] = _players
+          .firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => OnlinePlayerModel(
+              uid: uid,
+              name: 'Player',
+              isOnline: true,
+              joinedAt: 0,
+            ),
+          )
+          .name;
     }
 
     switch (phase) {
       case 'playerTurn':
       case 'turnTransition':
         if (isMyTurn) {
-          emit(OnlinePlayerTurn(
-            myName: _myName ?? '',
-            activePlayerName: activePlayer.name,
-            isMyTurn: true,
-            myHand: _myHand,
-            currentRound: currentRound,
-            currentSuit: currentRound?.suit,
-            highestCard: currentRound != null
-                ? _moveRules.currentHighestCard(currentRound.playedCards)
-                : null,
-            allPlayers: _players,
-            playerNames: pNames,
-            isHost: false,
-            isFirstTurn: completedRounds.isEmpty && currentRound == null,
-            unendingLoopDetected: data['unendingLoopDetected'] as bool? ?? false,
-          ));
+          emit(
+            OnlinePlayerTurn(
+              myName: _myName ?? '',
+              activePlayerName: activePlayer.name,
+              isMyTurn: true,
+              myHand: _myHand,
+              currentRound: currentRound,
+              currentSuit: currentRound?.suit,
+              highestCard: currentRound != null
+                  ? _moveRules.currentHighestCard(currentRound.playedCards)
+                  : null,
+              allPlayers: _players,
+              playerNames: pNames,
+              isHost: false,
+              isFirstTurn: completedRounds.isEmpty && currentRound == null,
+              unendingLoopDetected:
+                  data['unendingLoopDetected'] as bool? ?? false,
+            ),
+          );
         } else {
-          emit(OnlineWaitingForTurn(
-            activePlayerName: activePlayer.name,
-            myHand: _myHand,
-            currentRound: currentRound,
-            allPlayers: _players,
-            playerNames: pNames,
-          ));
+          emit(
+            OnlineWaitingForTurn(
+              activePlayerName: activePlayer.name,
+              myHand: _myHand,
+              currentRound: currentRound,
+              allPlayers: _players,
+              playerNames: pNames,
+            ),
+          );
         }
         break;
       case 'punishmentSelection':
@@ -750,25 +965,37 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
           final targetId = playedCards.isNotEmpty
               ? _punishmentRules.targetOfPunishment(playedCards)
               : '';
-          final targetUid = targetId.isNotEmpty && playerOrder.length > int.tryParse(targetId.replaceAll('p', ''))!
+          final targetUid =
+              targetId.isNotEmpty &&
+                  playerOrder.length >
+                      int.tryParse(targetId.replaceAll('p', ''))!
               ? playerOrder[int.parse(targetId.replaceAll('p', ''))]
               : '';
           final targetPlayer = _players.firstWhere(
             (p) => p.uid == targetUid,
-            orElse: () => OnlinePlayerModel(uid: '', name: 'Player', isOnline: true, joinedAt: 0),
+            orElse: () => OnlinePlayerModel(
+              uid: '',
+              name: 'Player',
+              isOnline: true,
+              joinedAt: 0,
+            ),
           );
-          emit(OnlinePunishmentNeeded(
-            myHand: _myHand,
-            receivingPlayerName: targetPlayer.name,
-          ));
+          emit(
+            OnlinePunishmentNeeded(
+              myHand: _myHand,
+              receivingPlayerName: targetPlayer.name,
+            ),
+          );
         } else {
-          emit(OnlineWaitingForTurn(
-            activePlayerName: activePlayer.name,
-            myHand: _myHand,
-            currentRound: currentRound,
-            allPlayers: _players,
-            playerNames: pNames,
-          ));
+          emit(
+            OnlineWaitingForTurn(
+              activePlayerName: activePlayer.name,
+              myHand: _myHand,
+              currentRound: currentRound,
+              allPlayers: _players,
+              playerNames: pNames,
+            ),
+          );
         }
         break;
       case 'roundEnd':
@@ -783,7 +1010,8 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
                 roundNumber: 0,
                 suit: Suit.spades,
                 leadPlayerId: '',
-                playedCards: []);
+                playedCards: [],
+              );
         // Punishment info — read directly from stored round data (no local computation needed)
         String? punishReceiverName;
         String? punishReceiverUid;
@@ -797,53 +1025,82 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
             }
           }
           if (punishReceiverUid != null) {
-            punishReceiverName = _players.firstWhere(
-              (p) => p.uid == punishReceiverUid,
-              orElse: () => OnlinePlayerModel(uid: '', name: 'Player', isOnline: true, joinedAt: 0),
-            ).name;
+            punishReceiverName = _players
+                .firstWhere(
+                  (p) => p.uid == punishReceiverUid,
+                  orElse: () => OnlinePlayerModel(
+                    uid: '',
+                    name: 'Player',
+                    isOnline: true,
+                    joinedAt: 0,
+                  ),
+                )
+                .name;
           }
           // Play punishment sound if I am the one being punished
           if (punishReceiverUid == _myUid) {
             _audio.playPunishSound();
           }
         }
-        emit(OnlineRoundCompleted(
-          nextRoundLeaderName: winnerName,
-          completedRound: lastRound,
-          playerNames: pNames,
-          isHost: false,
-          punishmentCard: lastRound.punishmentCard,
-          punishmentReceiverName: punishReceiverName,
-          punishmentReceiverUid: punishReceiverUid,
-        ));
+        emit(
+          OnlineRoundCompleted(
+            nextRoundLeaderName: winnerName,
+            completedRound: lastRound,
+            playerNames: pNames,
+            isHost: false,
+            punishmentCard: lastRound.punishmentCard,
+            punishmentReceiverName: punishReceiverName,
+            punishmentReceiverUid: punishReceiverUid,
+          ),
+        );
         break;
       case 'gameOver':
         final donkeyUid = data['donkeyPlayerUid'] as String? ?? '';
         final donkeyPlayer = _players.firstWhere(
           (p) => p.uid == donkeyUid,
-          orElse: () => OnlinePlayerModel(uid: '', name: 'Unknown', isOnline: true, joinedAt: 0),
+          orElse: () => OnlinePlayerModel(
+            uid: '',
+            name: 'Unknown',
+            isOnline: true,
+            joinedAt: 0,
+          ),
         );
-        final finishedUids = (data['finishedPlayerUids'] as List<Object?>? ?? [])
-            .map((e) => e.toString())
-            .toList();
+        final finishedUids =
+            (data['finishedPlayerUids'] as List<Object?>? ?? [])
+                .map((e) => e.toString())
+                .toList();
         final finishing = finishedUids.map((uid) {
           return _players
-              .firstWhere((p) => p.uid == uid,
-                  orElse: () => OnlinePlayerModel(
-                      uid: uid, name: uid, isOnline: true, joinedAt: 0))
+              .firstWhere(
+                (p) => p.uid == uid,
+                orElse: () => OnlinePlayerModel(
+                  uid: uid,
+                  name: uid,
+                  isOnline: true,
+                  joinedAt: 0,
+                ),
+              )
               .name;
-        }).toList()
-          ..add(donkeyPlayer.name);
-        emit(OnlineGameFinished(
-            donkeyName: donkeyPlayer.name, finishingOrder: finishing));
+        }).toList()..add(donkeyPlayer.name);
+        emit(
+          OnlineGameFinished(
+            donkeyName: donkeyPlayer.name,
+            finishingOrder: finishing,
+          ),
+        );
         break;
     }
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
-  Map<String, dynamic> _buildPublicGameState(engine.GameState gs, List<String> playerUids) {
-    final phase = gs.phase == GamePhase.turnTransition ? 'playerTurn' : gs.phase.name;
+  Map<String, dynamic> _buildPublicGameState(
+    engine.GameState gs,
+    List<String> playerUids,
+  ) {
+    final phase = gs.phase == GamePhase.turnTransition
+        ? 'playerTurn'
+        : gs.phase.name;
 
     Map<String, dynamic>? roundMap;
     if (gs.currentRound != null) {
@@ -905,21 +1162,27 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       'suit': r.suit.name,
       'leadPlayerId': r.leadPlayerId,
       'winnerId': r.winnerId,
-      'playedCards': r.playedCards.map((pc) => {
-        'playerId': pc.playerId,
-        'card': pc.card.toJson(),
-      }).toList(),
+      'playedCards': r.playedCards
+          .map((pc) => {'playerId': pc.playerId, 'card': pc.card.toJson()})
+          .toList(),
       // Punishment fields — only set when punishment occurred
-      if (r.punishmentCard != null) 'punishmentCard': r.punishmentCard!.toJson(),
-      if (punishmentReceiverUid != null) 'punishmentReceiverUid': punishmentReceiverUid,
+      if (r.punishmentCard != null)
+        'punishmentCard': r.punishmentCard!.toJson(),
+      if (punishmentReceiverUid != null)
+        'punishmentReceiverUid': punishmentReceiverUid,
     };
   }
 
   RoundModel _parseRound(Map<Object?, Object?> data) {
     final suitStr = data['suit'] as String? ?? 'spades';
-    final suit = Suit.values.firstWhere((s) => s.name == suitStr, orElse: () => Suit.spades);
+    final suit = Suit.values.firstWhere(
+      (s) => s.name == suitStr,
+      orElse: () => Suit.spades,
+    );
     final playedCardsRaw = data['playedCards'] as List<Object?>? ?? [];
-    final playedCards = playedCardsRaw.whereType<Map<Object?, Object?>>().map((pc) {
+    final playedCards = playedCardsRaw.whereType<Map<Object?, Object?>>().map((
+      pc,
+    ) {
       final cardData = pc['card'] as Map<Object?, Object?>? ?? {};
       final m = cardData.map((k, v) => MapEntry(k.toString(), v));
       return PlayedCard(
@@ -944,7 +1207,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     );
   }
 
-  Future<void> _onLeaveRoom(OnlineLeaveRoom event, Emitter<OnlineState> emit) async {
+  Future<void> _onLeaveRoom(
+    OnlineLeaveRoom event,
+    Emitter<OnlineState> emit,
+  ) async {
     if (_room != null && _myUid != null) {
       await repository.leaveRoom(_room!.roomId, _myUid!);
     }

@@ -9,6 +9,7 @@ import '../../core/constants/app_colors.dart';
 import '../../widgets/premium_toast.dart';
 import 'online_game_screen.dart';
 import '../home/home_screen.dart';
+import '../../services/audio_service.dart';
 
 class WaitingRoomScreen extends StatelessWidget {
   const WaitingRoomScreen({super.key});
@@ -22,6 +23,7 @@ class WaitingRoomScreen extends StatelessWidget {
         } else if (state is OnlinePlayerTurn ||
             state is OnlineWaitingForTurn ||
             state is OnlineRoundCompleted) {
+          AudioService().stopBgm();
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const OnlineGameScreen()),
           );
@@ -64,17 +66,18 @@ class WaitingRoomScreen extends StatelessWidget {
                         child: Row(
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.close, color: Colors.white54),
+                              icon: const Icon(Icons.close, color: Color(0xFFC2C8A4)),
                               onPressed: () {
+                                AudioService().playTapSound();
                                 context.read<OnlineBloc>().add(OnlineLeaveRoom());
                                 Navigator.of(context).pop();
                               },
                             ),
                             const Spacer(),
                             Text(
-                              isHost ? 'Hosting' : 'Waiting',
+                              isHost ? '👑 Hosting' : '⏳ Waiting',
                               style: const TextStyle(
-                                  color: Colors.white54, fontSize: 14),
+                                  color: Color(0xFFF2D87B), fontSize: 14, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
@@ -93,9 +96,9 @@ class WaitingRoomScreen extends StatelessWidget {
                         ),
                         child: Column(
                           children: [
-                            const Text('Room Code',
+                            const Text('ROOM CODE',
                                 style: TextStyle(
-                                    color: Colors.white54, fontSize: 13)),
+                                    color: Color(0xFFF2D87B), fontSize: 12, letterSpacing: 2, fontWeight: FontWeight.bold)),
                             const SizedBox(height: 6),
                             Row(
                               mainAxisSize: MainAxisSize.min,
@@ -112,8 +115,9 @@ class WaitingRoomScreen extends StatelessWidget {
                                 const SizedBox(width: 12),
                                 IconButton(
                                   icon: const Icon(Icons.copy,
-                                      color: Colors.white54),
+                                      color: Color(0xFFD3AC47)),
                                   onPressed: () {
+                                    AudioService().playTapSound();
                                     Clipboard.setData(
                                         ClipboardData(text: room.roomCode));
                                     PremiumToast.show(
@@ -126,11 +130,10 @@ class WaitingRoomScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      Text(
-                        '${players.length}/${room.maxPlayers} players joined',
-                        style:
-                            const TextStyle(color: Colors.white54, fontSize: 14),
-                      ),
+                       Text(
+                         '${players.length}/${room.maxPlayers} players joined',
+                         style: const TextStyle(color: Color(0xFFF2D87B), fontSize: 14, fontWeight: FontWeight.w600),
+                       ),
                       const SizedBox(height: 32),
 
                       // Player list
@@ -158,14 +161,15 @@ class WaitingRoomScreen extends StatelessWidget {
                             width: double.infinity,
                             child: ElevatedButton(
                               onPressed: players.length >= 2
-                                  ? () => context
-                                      .read<OnlineBloc>()
-                                      .add(HostStartGame())
+                                  ? () {
+                                      AudioService().playTapSound();
+                                      context.read<OnlineBloc>().add(HostStartGame());
+                                    }
                                   : null,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.goldAccent,
-                                foregroundColor: Colors.black,
-                                disabledBackgroundColor: Colors.white12,
+                                foregroundColor: const Color(0xFF2C1A0E),
+                                disabledBackgroundColor: const Color(0x1FC2C8A4),
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 18),
                                 shape: RoundedRectangleBorder(
@@ -180,16 +184,15 @@ class WaitingRoomScreen extends StatelessWidget {
                             ),
                           ),
                         ),
-                      ] else ...[
-                        const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text(
-                            'Waiting for the host to start the game…',
-                            style:
-                                TextStyle(color: Colors.white38, fontSize: 14),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
+                       ] else ...[
+                         const Padding(
+                           padding: EdgeInsets.all(16),
+                           child: Text(
+                             'Waiting for the host to start the game…',
+                             style: TextStyle(color: Color(0xFFC2C8A4), fontSize: 14),
+                             textAlign: TextAlign.center,
+                           ),
+                         ),
                       ],
                       const SizedBox(height: 32),
                     ],
@@ -221,12 +224,13 @@ class _PlayerTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
+        color: const Color(0xFF1A2C1A).withOpacity(0.6),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: isOnline
-              ? Colors.white12
-              : Colors.redAccent.withOpacity(0.3),
+              ? const Color(0xFFD3AC47).withOpacity(0.4)
+              : Colors.redAccent.withOpacity(0.5),
+          width: 1.5,
         ),
       ),
       child: Row(
@@ -235,11 +239,11 @@ class _PlayerTile extends StatelessWidget {
             radius: 18,
             backgroundColor: isHost
                 ? AppColors.goldAccent.withOpacity(0.2)
-                : Colors.white12,
+                : const Color(0x1FC2C8A4),
             child: Text(
               name.isNotEmpty ? name[0].toUpperCase() : '?',
               style: TextStyle(
-                  color: isHost ? AppColors.goldAccent : Colors.white70,
+                  color: isHost ? AppColors.goldAccent : const Color(0xFFC2C8A4),
                   fontWeight: FontWeight.bold),
             ),
           ),
@@ -250,7 +254,7 @@ class _PlayerTile extends StatelessWidget {
               children: [
                 Text(name,
                     style: const TextStyle(
-                        color: Colors.white,
+                        color: const Color(0xFFC2C8A4),
                         fontSize: 16,
                         fontWeight: FontWeight.w600)),
                 if (isHost)

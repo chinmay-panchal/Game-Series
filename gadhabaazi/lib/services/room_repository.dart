@@ -22,7 +22,8 @@ class RoomRepository {
     String? storedId = prefs.getString('persistent_device_user_id');
 
     if (storedId == null || storedId.isEmpty) {
-      storedId = 'dev_user_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}';
+      storedId =
+          'dev_user_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}';
       await prefs.setString('persistent_device_user_id', storedId);
     }
 
@@ -33,7 +34,9 @@ class RoomRepository {
       if (_auth.currentUser == null) {
         await _auth.signInAnonymously();
       }
-    } catch (_) {}
+    } catch (e, st) {
+      print('CHECK_ACTIVE_ROOM_ERROR: $e');
+    }
 
     return storedId;
   }
@@ -147,8 +150,12 @@ class RoomRepository {
       if (!event.snapshot.exists) return [];
       final data = event.snapshot.value as Map<Object?, Object?>;
       return data.entries
-          .map((e) => OnlinePlayerModel.fromJson(
-              e.key as String, e.value as Map<Object?, Object?>))
+          .map(
+            (e) => OnlinePlayerModel.fromJson(
+              e.key as String,
+              e.value as Map<Object?, Object?>,
+            ),
+          )
           .toList()
         ..sort((a, b) => a.joinedAt.compareTo(b.joinedAt));
     });
@@ -178,13 +185,10 @@ class RoomRepository {
     return _db.ref('rooms/$roomId/hands/$uid/cards').onValue.map((event) {
       if (!event.snapshot.exists) return [];
       final list = event.snapshot.value as List<Object?>;
-      return list
-          .whereType<Map<Object?, Object?>>()
-          .map((c) {
-            final m = c.map((k, v) => MapEntry(k.toString(), v));
-            return PlayingCard.fromJson(m);
-          })
-          .toList();
+      return list.whereType<Map<Object?, Object?>>().map((c) {
+        final m = c.map((k, v) => MapEntry(k.toString(), v));
+        return PlayingCard.fromJson(m);
+      }).toList();
     });
   }
 
@@ -271,7 +275,11 @@ class RoomRepository {
     });
   }
 
-  Future<void> setDisconnectTimer(String roomId, String uid, String name) async {
+  Future<void> setDisconnectTimer(
+    String roomId,
+    String uid,
+    String name,
+  ) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final expiresAt = now + 30000; // 30 seconds timer
     await _db.ref('rooms/$roomId/disconnectData').set({
@@ -331,13 +339,10 @@ class RoomRepository {
     final snap = await _db.ref('rooms/$roomId/hands/$uid/cards').get();
     if (!snap.exists) return [];
     final list = snap.value as List<Object?>;
-    return list
-        .whereType<Map<Object?, Object?>>()
-        .map((c) {
-          final m = c.map((k, v) => MapEntry(k.toString(), v));
-          return PlayingCard.fromJson(m);
-        })
-        .toList();
+    return list.whereType<Map<Object?, Object?>>().map((c) {
+      final m = c.map((k, v) => MapEntry(k.toString(), v));
+      return PlayingCard.fromJson(m);
+    }).toList();
   }
 
   Future<void> restartRoom(String roomId) async {

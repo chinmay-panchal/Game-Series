@@ -23,12 +23,12 @@ class SuitIndicatorWidget extends StatelessWidget {
         children: [
           const Text(
             'Current Suit: ',
-            style: TextStyle(color: Colors.white, fontSize: 16),
+            style: TextStyle(color: const Color(0xFFC2C8A4), fontSize: 16),
           ),
           Text(
             suit!.symbol,
             style: TextStyle(
-              color: suit!.isRed ? AppColors.redCard : AppColors.white,
+              color: suit!.isRed ? AppColors.redCard : const Color(0xFFC2C8A4),
               fontSize: 24,
               fontWeight: FontWeight.bold,
             ),

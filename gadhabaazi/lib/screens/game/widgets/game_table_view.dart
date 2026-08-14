@@ -10,6 +10,7 @@ import 'dealing_animation_widget.dart';
 import '../../../widgets/categorized_hand_widget.dart';
 import '../../../widgets/suit_indicator_widget.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../services/audio_service.dart';
 
 class GameTableView extends StatefulWidget {
   final GameBlocState state;
@@ -87,7 +88,7 @@ class _GameTableViewState extends State<GameTableView> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: const Color(0xFFC2C8A4),
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: const [
                   BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
@@ -123,12 +124,15 @@ class _GameTableViewState extends State<GameTableView> {
         children: [
           if (state.unendingLoopDetected && state.isHandRevealed) ...[
             ElevatedButton.icon(
-              onPressed: () => context.read<GameBloc>().add(DistributeNewCards()),
+              onPressed: () {
+                AudioService().playTapSound();
+                context.read<GameBloc>().add(DistributeNewCards());
+              },
               icon: const Icon(Icons.refresh),
               label: const Text("Distribute New Cards"),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.redCard,
-                foregroundColor: Colors.white,
+                foregroundColor: const Color(0xFFC2C8A4),
               ),
             ),
             const SizedBox(height: 16),
@@ -157,6 +161,7 @@ class _GameTableViewState extends State<GameTableView> {
         padding: const EdgeInsets.only(bottom: 32.0),
         child: ElevatedButton(
           onPressed: () {
+            AudioService().playTapSound();
             context.read<GameBloc>().add(StartNextRound());
           },
           child: const Text("Next Round"),
@@ -170,13 +175,18 @@ class _GameTableViewState extends State<GameTableView> {
           padding: const EdgeInsets.only(bottom: 64.0),
           child: ElevatedButton.icon(
             onPressed: () {
+              AudioService().playTapSound();
               context.read<GameBloc>().add(RevealHand());
             },
-            icon: const Icon(Icons.swap_horiz),
+            icon: const Icon(Icons.swap_horiz, color: Color(0xFFF2D87B)),
             label: Text("Pass to ${state.activePlayer.name}"),
             style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1A2C1A),
+              foregroundColor: const Color(0xFFF2D87B),
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-              textStyle: const TextStyle(fontSize: 20),
+              textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              side: const BorderSide(color: Color(0xFFD3AC47), width: 2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
           ),
         );
@@ -203,12 +213,12 @@ class _GameTableViewState extends State<GameTableView> {
                           vertical: 12,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: const Color(0xFF1A2C1A),
                           borderRadius: BorderRadius.circular(12),
                           boxShadow: const [
                             BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
                           ],
-                          border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                          border: Border.all(color: Colors.redAccent, width: 2),
                         ),
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
@@ -218,7 +228,7 @@ class _GameTableViewState extends State<GameTableView> {
                             Text(
                               "No matching suit\nThis card will be given as punishment",
                               style: TextStyle(
-                                color: Colors.black87,
+                                color: Color(0xFFF2D87B),
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -230,12 +240,16 @@ class _GameTableViewState extends State<GameTableView> {
                       const SizedBox(height: 8),
                       ElevatedButton(
                         onPressed: () {
+                          AudioService().playTapSound();
                           context.read<GameBloc>().add(
                             GivePunishmentCard(_selectedCard!),
                           );
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
+                          backgroundColor: Colors.red.shade900,
+                          foregroundColor: const Color(0xFFC2C8A4),
+                          side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         child: const Text("Give Punishment Card"),
                       ),
@@ -244,8 +258,17 @@ class _GameTableViewState extends State<GameTableView> {
                 } else {
                   return ElevatedButton(
                     onPressed: () {
+                      AudioService().playTapSound();
                       context.read<GameBloc>().add(PlayCard(_selectedCard!));
                     },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1A2C1A),
+                      foregroundColor: const Color(0xFFF2D87B),
+                      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      side: const BorderSide(color: Color(0xFFD3AC47), width: 2),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
                     child: const Text("Play Card"),
                   );
                 }

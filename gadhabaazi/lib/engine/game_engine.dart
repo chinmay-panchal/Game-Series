@@ -442,4 +442,96 @@ class GameEngine {
       moveType: MoveType.cardPlayed, // Generic success for BLoC
     );
   }
+
+  MoveResult redistributePlayerCards(GameState state, String disconnectedPlayerId) {
+    int discIdx = state.players.indexWhere((p) => p.id == disconnectedPlayerId);
+    if (discIdx == -1) {
+      return MoveResult(gameState: state, moveType: MoveType.cardPlayed);
+    }
+
+    Player disconnectedPlayer = state.players[discIdx];
+    List<PlayingCard> cardsToDistribute = List.from(disconnectedPlayer.hand);
+
+    List<Player> newPlayers = List.from(state.players);
+
+    // Empty the disconnected player's hand and mark as non-active/finished
+    newPlayers[discIdx] = newPlayers[discIdx].copyWith(hand: []);
+
+    // Get active remaining players (those with hands or still playing)
+    List<int> activeRemainingIndices = [];
+    for (int i = 0; i < newPlayers.length; i++) {
+      if (i != discIdx && !state.finishedPlayerIds.contains(newPlayers[i].id)) {
+        activeRemainingIndices.add(i);
+      }
+    }
+
+    // Check if only 1 active player remains
+    if (activeRemainingIndices.length <= 1) {
+      String? winnerId;
+      if (activeRemainingIndices.isNotEmpty) {
+        winnerId = newPlayers[activeRemainingIndices.first].id;
+      }
+      List<String> newFinished = List.from(state.finishedPlayerIds);
+      if (winnerId != null && !newFinished.contains(winnerId)) {
+        newFinished.insert(0, winnerId);
+      }
+      if (!newFinished.contains(disconnectedPlayerId)) {
+        newFinished.add(disconnectedPlayerId);
+      }
+
+      return MoveResult(
+        gameState: state.copyWith(
+          players: newPlayers,
+          phase: GamePhase.gameOver,
+          donkeyPlayerId: disconnectedPlayerId,
+          finishedPlayerIds: newFinished,
+        ),
+        moveType: MoveType.gameCompleted,
+      );
+    }
+
+    // Distribute cards one-by-one to remaining active players
+    int recipientIdx = 0;
+    while (cardsToDistribute.isNotEmpty) {
+      int targetPlayerIdx = activeRemainingIndices[recipientIdx % activeRemainingIndices.length];
+      PlayingCard card = cardsToDistribute.removeAt(0);
+      List<PlayingCard> updatedHand = List.from(newPlayers[targetPlayerIdx].hand)..add(card);
+      
+      // Sort updated hand
+      updatedHand.sort((a, b) {
+        if (a.suit.index != b.suit.index) {
+          return a.suit.index.compareTo(b.suit.index);
+        }
+        return a.rank.index.compareTo(b.rank.index);
+      });
+      
+      newPlayers[targetPlayerIdx] = newPlayers[targetPlayerIdx].copyWith(hand: updatedHand);
+      recipientIdx++;
+    }
+
+    // Move activePlayerIndex if it was currently on the disconnected player
+    int nextActiveIdx = state.activePlayerIndex;
+    if (state.activePlayerIndex == discIdx) {
+      nextActiveIdx = (state.activePlayerIndex + 1) % newPlayers.length;
+      while (nextActiveIdx == discIdx || state.finishedPlayerIds.contains(newPlayers[nextActiveIdx].id)) {
+        nextActiveIdx = (nextActiveIdx + 1) % newPlayers.length;
+      }
+    }
+
+    MoveHistory newHistory = state.history.record(
+      'system',
+      'Player ${disconnectedPlayer.name} disconnected. Remaining cards distributed to active players.',
+    );
+
+    return MoveResult(
+      gameState: state.copyWith(
+        players: newPlayers,
+        activePlayerIndex: nextActiveIdx,
+        history: newHistory,
+        phase: GamePhase.playerTurn,
+      ),
+      moveType: MoveType.cardPlayed,
+    );
+  }
 }
+

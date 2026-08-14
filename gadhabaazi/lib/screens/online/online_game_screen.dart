@@ -14,10 +14,15 @@ import '../../widgets/suit_indicator_widget.dart';
 import '../../widgets/categorized_hand_widget.dart';
 import '../../widgets/table_center_widget.dart';
 import '../../engine/history/move_history.dart';
+import '../game/widgets/dealing_animation_widget.dart';
+import '../../services/audio_service.dart';
+import '../home/home_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// The main online game screen. Works for both host and guest.
 class OnlineGameScreen extends StatefulWidget {
-  const OnlineGameScreen({super.key});
+  final bool isRejoin;
+  const OnlineGameScreen({super.key, this.isRejoin = false});
 
   @override
   State<OnlineGameScreen> createState() => _OnlineGameScreenState();
@@ -30,6 +35,30 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   Timer? _hostDisconnectTimer;
   Timer? _roundCompleteTimer;
   bool _autoRedistributeDispatched = false;
+  bool _isDealing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Skip dealing animation on rejoin or if game already in progress
+    if (widget.isRejoin) {
+      _isDealing = false;
+      return;
+    }
+    final bloc = context.read<OnlineBloc>();
+    final state = bloc.state;
+    bool alreadyInProgress = false;
+    if (state is OnlinePlayerTurn) {
+      final playedCount = state.currentRound?.playedCards.length ?? 0;
+      final roundNum = state.currentRound?.roundNumber ?? 1;
+      if (roundNum > 1 || playedCount > 0) alreadyInProgress = true;
+    } else if (state is OnlineWaitingForTurn) {
+      final playedCount = state.currentRound?.playedCards.length ?? 0;
+      final roundNum = state.currentRound?.roundNumber ?? 1;
+      if (roundNum > 1 || playedCount > 0) alreadyInProgress = true;
+    }
+    if (alreadyInProgress) _isDealing = false;
+  }
 
   @override
   void dispose() {
@@ -55,6 +84,7 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   Widget build(BuildContext context) {
     return BlocConsumer<OnlineBloc, OnlineState>(
       listenWhen: (prev, curr) {
+        if (curr is OnlineRedistributingCards) return true;
         if (curr is OnlineError) return true;
         if (curr is OnlineRoundCompleted) return true;
         if (curr is OnlineGameFinished) return true;
@@ -69,7 +99,15 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         return false;
       },
       listener: (context, state) {
-        if (state is OnlineError) {
+        if (state is OnlineRedistributingCards) {
+          setState(() => _isDealing = true);
+          PremiumToast.show(
+            context,
+            '${state.disconnectedPlayerName} left! Redistributing their cards...',
+            isError: true,
+            duration: const Duration(seconds: 4),
+          );
+        } else if (state is OnlineError) {
           PremiumToast.show(context, state.message, isError: true);
         } else if (state is OnlineRoundCompleted) {
           // ── Auto-advance to next round after a brief pause ──
@@ -84,9 +122,12 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
 
           // ── Punishment toast ──
           final myUid = context.read<OnlineBloc>().myUid;
-          if (state.punishmentCard != null && state.punishmentReceiverUid != null) {
+          if (state.punishmentCard != null &&
+              state.punishmentReceiverUid != null) {
             final punisherEngineId = state.completedRound.winnerId;
-            final punisherName = punisherEngineId != null ? state.playerNames[punisherEngineId] ?? 'Someone' : 'Someone';
+            final punisherName = punisherEngineId != null
+                ? state.playerNames[punisherEngineId] ?? 'Someone'
+                : 'Someone';
 
             if (myUid == state.punishmentReceiverUid) {
               final card = state.punishmentCard!;
@@ -107,7 +148,9 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
           }
         } else if (state is OnlinePlayerTurn) {
           // ── Auto-redistribute when loop detected (host only) ──
-          if (state.unendingLoopDetected && state.isHost && !_autoRedistributeDispatched) {
+          if (state.unendingLoopDetected &&
+              state.isHost &&
+              !_autoRedistributeDispatched) {
             _autoRedistributeDispatched = true;
             context.read<OnlineBloc>().add(OnlineDistributeNewCards());
             PremiumToast.show(
@@ -130,8 +173,9 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
             orElse: () => allPlayers.first,
           );
           if (!offlineHost.isOnline && _hostDisconnectSeconds == 0) {
-            _startHostDisconnectCountdown(10);
-          } else if (allPlayers.every((p) => p.isOnline) && _hostDisconnectSeconds > 0) {
+            _startHostDisconnectCountdown(30);
+          } else if (allPlayers.every((p) => p.isOnline) &&
+              _hostDisconnectSeconds > 0) {
             _hostDisconnectTimer?.cancel();
             setState(() => _hostDisconnectSeconds = 0);
           }
@@ -146,120 +190,207 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
           if (_selectedCard != null) setState(() => _selectedCard = null);
         } else if (state is OnlineGameFinished) {
           _roundCompleteTimer?.cancel();
-          Navigator.of(context).pushReplacement(MaterialPageRoute(
-            builder: (_) => GameResultScreen(
-              donkeyName: state.donkeyName,
-              finishingOrder: state.finishingOrder,
-              history: const MoveHistory(),
-              isOnlineRoom: true,
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => GameResultScreen(
+                donkeyName: state.donkeyName,
+                finishingOrder: state.finishingOrder,
+                history: const MoveHistory(),
+                isOnlineRoom: true,
+              ),
             ),
-          ));
+          );
         }
       },
       builder: (context, state) {
-        return Scaffold(
-          body: Stack(
-            children: [
-              const AnimatedBackground(child: SizedBox.expand()),
-              SafeArea(
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Column(
-                    children: [
-                      _buildHeader(context, state),
-                      const Spacer(),
-                      _buildTableCenter(state),
-                      const Spacer(),
-                      _buildBottomArea(context, state),
-                    ],
+        return WillPopScope(
+          onWillPop: () async {
+            AudioService().playTapSound();
+            print('RJDBG WILLPOP: onWillPop triggered');
+            final bloc = context.read<OnlineBloc>();
+            final roomId = bloc.currentRoomId;
+            final uid = bloc.myUid;
+            final name = bloc.myName ?? 'Player';
+            final roomCode = bloc.currentRoomCode;
+            print(
+              'RJDBG WILLPOP: bloc.currentRoomId=$roomId bloc.myUid=$uid bloc.myName=$name bloc.currentRoomCode=$roomCode',
+            );
+
+            try {
+              if (roomId != null && uid != null) {
+                final repo = bloc.repository;
+                await repo.leaveRoom(roomId, uid);
+                await repo.setDisconnectTimer(roomId, uid, name);
+                print(
+                  'RJDBG WILLPOP: leaveRoom + setDisconnectTimer called for roomId=$roomId',
+                );
+
+                final disconnectData = await repo.getDisconnectData(roomId);
+                final expiresAt = disconnectData != null
+                    ? (disconnectData['expiresAt'] as int? ?? 0)
+                    : (DateTime.now().millisecondsSinceEpoch + 30000);
+
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('active_online_room_id', roomId);
+                if (roomCode != null)
+                  await prefs.setString('active_online_room_code', roomCode);
+                await prefs.setString('active_online_player_name', name);
+                await prefs.setString('active_online_player_uid', uid);
+                await prefs.setInt('active_online_expires_at', expiresAt);
+                print(
+                  'RJDBG WILLPOP: prefs re-saved, roomId=$roomId expiresAt=$expiresAt',
+                );
+
+                final verify = prefs.getString('active_online_room_id');
+                print('RJDBG WILLPOP VERIFY: read-back roomId=$verify');
+              } else {
+                print(
+                  'RJDBG WILLPOP: SKIPPED save — roomId or uid was null from bloc',
+                );
+              }
+            } catch (e, st) {
+              print('RJDBG WILLPOP ERROR: $e');
+              print('RJDBG WILLPOP STACK: $st');
+            }
+
+            if (mounted) {
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const HomeScreen()),
+                (route) => false,
+              );
+            }
+            return false;
+          },
+          child: Scaffold(
+            body: Stack(
+              children: [
+                const AnimatedBackground(child: SizedBox.expand()),
+                SafeArea(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Column(
+                      children: [
+                        _buildHeader(context, state),
+                        const Spacer(),
+                        Builder(
+                          builder: (ctx) {
+                            // Only skip dealing animation when rejoining an in-progress game
+                            if (_isDealing && widget.isRejoin) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted && _isDealing) {
+                                  setState(() => _isDealing = false);
+                                }
+                              });
+                            }
+                            return _isDealing
+                                ? DealingAnimationWidget(
+                                    onComplete: () {
+                                      if (mounted)
+                                        setState(() => _isDealing = false);
+                                    },
+                                  )
+                                : _buildTableCenter(state);
+                          },
+                        ),
+                        const Spacer(),
+                        _isDealing
+                            ? const SizedBox(height: 80)
+                            : _buildBottomArea(context, state),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              // ── No manual redistribute button — fully automatic ──
-              // ── Host Disconnect Countdown Banner ──
-              if (_hostDisconnectSeconds > 0)
-                Positioned(
-                  top: 60,
-                  left: 20,
-                  right: 20,
-                  child: Material(
-                    elevation: 10,
-                    borderRadius: BorderRadius.circular(12),
-                    color: Colors.red.shade900.withOpacity(0.96),
+                // ── No manual redistribute button — fully automatic ──
+                // ── Player Disconnect Countdown Red Circle in the Corner ──
+                if (_hostDisconnectSeconds > 0)
+                  Positioned(
+                    top: MediaQuery.of(context).padding.top + 16,
+                    right: 16,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      width: 48,
+                      height: 48,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.redAccent, width: 1.5),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.wifi_off, color: Colors.white, size: 20),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'A player disconnected! Assigning new host in $_hostDisconnectSeconds s...',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                              ),
-                            ),
+                        shape: BoxShape.circle,
+                        color: Colors.red.shade900.withOpacity(0.9),
+                        border: Border.all(color: Colors.redAccent, width: 2.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.4),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                ),
-              // ── Low Connection Popup Banner ──
-              StreamBuilder<bool>(
-                stream: context.read<OnlineBloc>().repository.onConnectionChanged,
-                builder: (context, snapshot) {
-                  final isConnected = snapshot.data ?? true;
-                  if (isConnected) return const SizedBox.shrink();
-                  return Positioned(
-                    top: 12,
-                    left: 20,
-                    right: 20,
-                    child: Material(
-                      elevation: 8,
-                      borderRadius: BorderRadius.circular(12),
-                      color: const Color(0xFF1E1E2C).withOpacity(0.95),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.amber.shade600, width: 1.5),
-                        ),
-                        child: Row(
-                          children: [
-                            const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.amber,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            const Expanded(
-                              child: Text(
-                                'Low Connection - Syncing state...',
-                                style: TextStyle(
-                                  color: Colors.amber,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          ],
+                      alignment: Alignment.center,
+                      child: Text(
+                        '$_hostDisconnectSeconds',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
-                  );
-                },
-              ),
-            ],
+                  ),
+                // ── Low Connection Popup Banner ──
+                StreamBuilder<bool>(
+                  stream: context
+                      .read<OnlineBloc>()
+                      .repository
+                      .onConnectionChanged,
+                  builder: (context, snapshot) {
+                    final isConnected = snapshot.data ?? true;
+                    if (isConnected) return const SizedBox.shrink();
+                    return Positioned(
+                      top: 12,
+                      left: 20,
+                      right: 20,
+                      child: Material(
+                        elevation: 8,
+                        borderRadius: BorderRadius.circular(12),
+                        color: const Color(0xFF1E1E2C).withOpacity(0.95),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.amber.shade600,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.amber,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  'Low Connection - Syncing state...',
+                                  style: TextStyle(
+                                    color: Colors.amber,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -311,20 +442,18 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                     colors: [Color(0xFFFFD700), Color(0xFFFFA500)],
                   )
                 : isRoundDone
-                    ? LinearGradient(
-                        colors: [
-                          Colors.green.shade800,
-                          Colors.green.shade600
-                        ],
-                      )
-                    : const LinearGradient(
-                        colors: [Color(0xFF2A2A4A), Color(0xFF1A1A2E)],
-                      ),
+                ? LinearGradient(
+                    colors: [Colors.green.shade800, Colors.green.shade600],
+                  )
+                : const LinearGradient(
+                    colors: [Color(0xFF2A2A4A), Color(0xFF1A1A2E)],
+                  ),
             borderRadius: BorderRadius.circular(30),
             boxShadow: [
               BoxShadow(
-                color: (isMyTurn ? Colors.orange : Colors.black)
-                    .withValues(alpha: 0.3),
+                color: (isMyTurn ? Colors.orange : Colors.black).withValues(
+                  alpha: 0.3,
+                ),
                 blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
@@ -340,19 +469,23 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                   height: 14,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: Colors.white70,
+                    color: const Color(0xFFC2C8A4),
                   ),
                 ),
                 const SizedBox(width: 8),
               ] else
                 Text(
-                  isMyTurn ? '🎯 ' : isRoundDone ? '✅ ' : '👁 ',
+                  isMyTurn
+                      ? '🎯 '
+                      : isRoundDone
+                      ? '✅ '
+                      : '👁 ',
                   style: const TextStyle(fontSize: 16),
                 ),
               Text(
                 turnLabel,
                 style: TextStyle(
-                  color: isMyTurn ? Colors.black87 : Colors.white,
+                  color: isMyTurn ? Colors.black87 : const Color(0xFFC2C8A4),
                   fontSize: 15,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 0.3,
@@ -365,35 +498,37 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         if (suit != null) ...[
           const SizedBox(height: 8),
           SuitIndicatorWidget(
-              suit: state is OnlinePlayerTurn
-                  ? state.currentSuit
-                  : state is OnlineWaitingForTurn
-                      ? state.currentRound?.suit
-                      : null),
+            suit: state is OnlinePlayerTurn
+                ? state.currentSuit
+                : state is OnlineWaitingForTurn
+                ? state.currentRound?.suit
+                : null,
+          ),
         ],
         // ── First turn notice ──
         if (isFirstTurn) ...[
           const SizedBox(height: 8),
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFFC2C8A4),
               borderRadius: BorderRadius.circular(12),
               boxShadow: const [
                 BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 8,
-                    offset: Offset(0, 4))
+                  color: Colors.black26,
+                  blurRadius: 8,
+                  offset: Offset(0, 4),
+                ),
               ],
             ),
             child: const Text(
               '♠ Start with the Ace of Spades',
               style: TextStyle(
-                  color: Colors.black87,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold),
+                color: Colors.black87,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
               textAlign: TextAlign.center,
             ),
           ),
@@ -446,13 +581,13 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
               height: 14,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
-                color: Colors.white38,
+                color: const Color(0x61C2C8A4),
               ),
             ),
             SizedBox(width: 10),
             Text(
               'Starting next round…',
-              style: TextStyle(color: Colors.white38, fontSize: 14),
+              style: TextStyle(color: const Color(0x61C2C8A4), fontSize: 14),
             ),
           ],
         ),
@@ -497,7 +632,8 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   }
 
   Widget _buildMyTurnArea(BuildContext context, OnlinePlayerTurn state) {
-    final mustPunish = state.currentSuit != null &&
+    final mustPunish =
+        state.currentSuit != null &&
         !state.myHand.any((c) => c.suit == state.currentSuit);
 
     return Column(
@@ -508,12 +644,16 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 24),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: const Color(0xFFC2C8A4),
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: const [
-                  BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 8,
+                    offset: Offset(0, 4),
+                  ),
                 ],
-                border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                border: Border.all(color: Colors.redAccent, width: 2),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
@@ -523,9 +663,10 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                   Text(
                     'No matching suit\nThis card will be given as punishment',
                     style: TextStyle(
-                        color: Colors.black87,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold),
+                      color: Color(0xFFF2D87B),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                 ],
@@ -536,15 +677,38 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
               onPressed: () {
                 _submitMove(context, state, isPunishment: true);
               },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade900,
+                foregroundColor: const Color(0xFFC2C8A4),
+                side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
               child: const Text('Give Punishment Card'),
             ),
           ] else ...[
             ElevatedButton(
               onPressed: () => _submitMove(context, state, isPunishment: false),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A2C1A),
+                foregroundColor: const Color(0xFFF2D87B),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 28,
+                  vertical: 12,
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+                side: const BorderSide(color: Color(0xFFD3AC47), width: 2),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
               child: const Text('Play Card'),
             ),
-          ]
+          ],
         ] else
           const SizedBox(height: 48),
         const SizedBox(height: 16),
@@ -565,48 +729,84 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
     );
   }
 
-  void _submitMove(BuildContext context, OnlinePlayerTurn state,
-      {required bool isPunishment}) {
-    if (_selectedCard == null) return;
+  void _submitMove(
+    BuildContext context,
+    OnlinePlayerTurn state, {
+    required bool isPunishment,
+  }) {
+    print(
+      'RJDBG SUBMIT_MOVE: tapped, isPunishment=$isPunishment selectedCard=$_selectedCard',
+    );
+    if (_selectedCard == null) {
+      print('RJDBG SUBMIT_MOVE: bailing — no card selected');
+      return;
+    }
     final card = _selectedCard!;
     setState(() => _selectedCard = null);
+
+    final bloc = context.read<OnlineBloc>();
+    print(
+      'RJDBG SUBMIT_MOVE: isHost=${state.isHost} card=${card.rank.name} of ${card.suit.name}',
+    );
 
     if (state.isHost) {
       // Host calls engine directly
       if (isPunishment) {
-        context.read<OnlineBloc>().add(OnlineGivePunishment(card));
+        bloc.add(OnlineGivePunishment(card));
       } else {
-        context.read<OnlineBloc>().add(OnlinePlayCard(card));
+        bloc.add(OnlinePlayCard(card));
       }
+      print('RJDBG SUBMIT_MOVE: dispatched host event');
     } else {
       // Guest submits via RTDB pendingAction
-      context.read<OnlineBloc>().repository.submitPendingAction(
-            roomId: context.read<OnlineBloc>().currentRoomId!,
-            playerId: context.read<OnlineBloc>().myUid!,
+      final roomId = bloc.currentRoomId;
+      final uid = bloc.myUid;
+      print('RJDBG SUBMIT_MOVE: guest submitting, roomId=$roomId uid=$uid');
+      if (roomId == null || uid == null) {
+        print('RJDBG SUBMIT_MOVE: bailing — roomId or uid null, cannot submit');
+        return;
+      }
+      bloc.repository
+          .submitPendingAction(
+            roomId: roomId,
+            playerId: uid,
             type: isPunishment ? 'givePunishment' : 'playCard',
             cardSuit: card.suit.name,
             cardRank: card.rank.name,
-          );
+          )
+          .then((_) {
+            print(
+              'RJDBG SUBMIT_MOVE: submitPendingAction completed successfully',
+            );
+          })
+          .catchError((e, st) {
+            print('RJDBG SUBMIT_MOVE ERROR: $e');
+            print('RJDBG SUBMIT_MOVE STACK: $st');
+          });
     }
   }
 
-  Widget _buildPunishmentArea(BuildContext context, OnlinePunishmentNeeded state) {
+  Widget _buildPunishmentArea(
+    BuildContext context,
+    OnlinePunishmentNeeded state,
+  ) {
     return Column(
       children: [
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 24),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: const Color(0xFFC2C8A4),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
           ),
           child: Text(
             '⚠️  You must give a punishment card to ${state.receivingPlayerName}',
             style: const TextStyle(
-                color: Colors.black87,
-                fontWeight: FontWeight.bold,
-                fontSize: 14),
+              color: Colors.black87,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
             textAlign: TextAlign.center,
           ),
         ),

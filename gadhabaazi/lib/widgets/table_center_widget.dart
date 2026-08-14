@@ -26,16 +26,7 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
   @override
   Widget build(BuildContext context) {
     if (widget.currentRound == null || widget.currentRound!.playedCards.isEmpty) {
-      return const Center(
-        child: Text(
-          "Table Empty",
-          style: TextStyle(
-            color: Colors.white24,
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      );
+      return const SizedBox.shrink();
     }
 
     final playedCards = widget.currentRound!.playedCards;
@@ -93,7 +84,7 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
                             child: Text(
                               displayName,
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: const Color(0xFFC2C8A4),
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold,
                               ),

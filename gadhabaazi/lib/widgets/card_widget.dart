@@ -34,10 +34,10 @@ class CardWidget extends StatelessWidget {
         height: height,
         transform: Matrix4.translationValues(0, isSelected ? -20 : 0, 0),
         decoration: BoxDecoration(
-          color: faceUp ? AppColors.white : AppColors.goldAccent,
+          color: faceUp ? Colors.white : AppColors.goldAccent,
           borderRadius: BorderRadius.circular(AppSizes.cardRadius),
           border: Border.all(
-            color: isSelected ? AppColors.goldAccent : Colors.black26,
+            color: isSelected ? AppColors.goldAccent : const Color(0xFF1A2C1A),
             width: isSelected ? 3 : 1,
           ),
           boxShadow: [
@@ -137,13 +137,15 @@ class CardWidget extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.tableLightGreen,
         borderRadius: BorderRadius.circular(AppSizes.cardRadius),
-        border: Border.all(color: AppColors.white, width: 2),
+        border: Border.all(color: const Color(0xFF1A2C1A), width: 2),
       ),
       child: Center(
-        child: Icon(
-          Icons.star,
-          color: AppColors.goldAccent.withAlpha(128),
-          size: 32,
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Image.asset(
+            'assets/images/starting.png',
+            fit: BoxFit.contain,
+          ),
         ),
       ),
     );

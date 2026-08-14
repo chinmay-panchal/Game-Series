@@ -49,7 +49,7 @@ class _PunishmentScreenState extends State<PunishmentScreen> {
                       context.read<GameBloc>().add(GivePunishmentCard(_selectedCard!));
                     },
                     style: ElevatedButton.styleFrom(backgroundColor: AppColors.redCard),
-                    child: const Text("Confirm Punishment", style: TextStyle(color: AppColors.white)),
+                    child: const Text("Confirm Punishment", style: TextStyle(color: const Color(0xFFC2C8A4))),
                   ),
                 const SizedBox(height: 32),
                 CategorizedHandWidget(

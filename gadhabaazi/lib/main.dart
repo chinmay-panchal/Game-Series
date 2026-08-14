@@ -7,6 +7,7 @@ import 'blocs/online/online_bloc.dart';
 import 'engine/game_engine.dart';
 import 'services/room_repository.dart';
 import 'screens/home/home_screen.dart';
+import 'screens/splash/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,7 +29,7 @@ class GadhabaaziApp extends StatelessWidget {
         title: 'Gadhabaazi',
         theme: AppTheme.darkTheme,
         debugShowCheckedModeBanner: false,
-        home: const HomeScreen(),
+        home: const SplashScreen(),
       ),
     );
   }

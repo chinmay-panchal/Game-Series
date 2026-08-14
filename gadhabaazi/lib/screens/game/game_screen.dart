@@ -21,53 +21,62 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocConsumer<GameBloc, GameBlocState>(
-      listenWhen: (previous, current) {
-        if (current is GameError) return true;
-        if (current is GameRoundCompleted) return true;
-        if (current is GamePlayerTurn) {
-          return _lastPlayerName != current.activePlayer.name;
-        }
-        return false;
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) {
+        if (didPop) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
       },
-      listener: (context, state) {
-        if (state is GameError) {
-          PremiumToast.show(context, state.message, isError: true);
-        } else if (state is GameRoundCompleted) {
-          // Show punishment toast if this round ended with a punishment
-          if (state.completedRound.punishmentCard != null) {
-            final card = state.completedRound.punishmentCard!;
-            PremiumToast.show(
-              context,
-              '🎴 Punished with ${card.rank.label}${card.suit.symbol}! Check your hand.',
-              isError: true,
-              duration: const Duration(seconds: 4),
-            );
+      child: BlocConsumer<GameBloc, GameBlocState>(
+        listenWhen: (previous, current) {
+          if (current is GameError) return true;
+          if (current is GameRoundCompleted) return true;
+          if (current is GamePlayerTurn) {
+            return _lastPlayerName != current.activePlayer.name;
           }
-        } else if (state is GamePlayerTurn) {
-          _lastPlayerName = state.activePlayer.name;
-          PremiumToast.show(context, "${state.activePlayer.name}'s turn");
-        }
-      },
-      builder: (context, state) {
-        if (state is GameInitial) {
-          return const HomeScreen();
-        } else if (state is GamePunishmentSelection) {
-          return PunishmentScreen(state: state);
-        } else if (state is GameFinished) {
-          return GameResultScreen(
-            donkeyName: state.donkeyName,
-            finishingOrder: state.finishingOrder,
-            history: state.history,
-          );
-        } else {
-          // Initialize last player on first build if possible without toast spam
-          if (state is GamePlayerTurn && _lastPlayerName == null) {
+          return false;
+        },
+        listener: (context, state) {
+          if (state is GameError) {
+            PremiumToast.show(context, state.message, isError: true);
+          } else if (state is GameRoundCompleted) {
+            // Show punishment toast if this round ended with a punishment
+            if (state.completedRound.punishmentCard != null) {
+              final card = state.completedRound.punishmentCard!;
+              PremiumToast.show(
+                context,
+                '🎴 Punished with ${card.rank.label}${card.suit.symbol}! Check your hand.',
+                isError: true,
+                duration: const Duration(seconds: 4),
+              );
+            }
+          } else if (state is GamePlayerTurn) {
             _lastPlayerName = state.activePlayer.name;
+            PremiumToast.show(context, "${state.activePlayer.name}'s turn");
           }
-          return GameTableView(state: state);
-        }
-      },
+        },
+        builder: (context, state) {
+          if (state is GameInitial) {
+            return const HomeScreen();
+          } else if (state is GamePunishmentSelection) {
+            return PunishmentScreen(state: state);
+          } else if (state is GameFinished) {
+            return GameResultScreen(
+              donkeyName: state.donkeyName,
+              finishingOrder: state.finishingOrder,
+              history: state.history,
+            );
+          } else {
+            // Initialize last player on first build if possible without toast spam
+            if (state is GamePlayerTurn && _lastPlayerName == null) {
+              _lastPlayerName = state.activePlayer.name;
+            }
+            return GameTableView(state: state);
+          }
+        },
+      ),
     );
   }
 }
