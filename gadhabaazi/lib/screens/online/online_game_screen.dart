@@ -13,11 +13,13 @@ import '../result/game_result_screen.dart';
 import '../../widgets/suit_indicator_widget.dart';
 import '../../widgets/categorized_hand_widget.dart';
 import '../../widgets/table_center_widget.dart';
+import '../../widgets/card_play_animation.dart';
 import '../../engine/history/move_history.dart';
 import '../game/widgets/dealing_animation_widget.dart';
 import '../../services/audio_service.dart';
 import '../home/home_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../models/played_card.dart';
 
 /// The main online game screen. Works for both host and guest.
 class OnlineGameScreen extends StatefulWidget {
@@ -36,6 +38,16 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   Timer? _roundCompleteTimer;
   bool _autoRedistributeDispatched = false;
   bool _isDealing = true;
+  int _dealAmount = 24;
+
+  // Animation keys
+  final GlobalKey _tableKey = GlobalKey();
+
+  // Remote card animation tracking
+  List<PlayedCard> _lastPlayedCards = [];
+  PlayingCard? _remoteDropCard;
+  bool _remoteDropIsPunishment = false;
+  bool _showRemoteDrop = false;
 
   @override
   void initState() {
@@ -94,6 +106,7 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
           return _lastActivePlayer != curr.activePlayerName;
         }
         if (curr is OnlineWaitingForTurn) {
+          if (curr.unendingLoopDetected) return true;
           return _lastActivePlayer != curr.activePlayerName;
         }
         return false;
@@ -146,26 +159,43 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
               );
             }
           }
-        } else if (state is OnlinePlayerTurn) {
-          // ── Auto-redistribute when loop detected (host only) ──
-          if (state.unendingLoopDetected &&
-              state.isHost &&
-              !_autoRedistributeDispatched) {
-            _autoRedistributeDispatched = true;
+        }
+
+        bool loopDetected = false;
+        bool isHost = false;
+        if (state is OnlinePlayerTurn) {
+          loopDetected = state.unendingLoopDetected;
+          isHost = state.isHost;
+        } else if (state is OnlineWaitingForTurn) {
+          loopDetected = state.unendingLoopDetected;
+          isHost = state.isHost;
+        }
+
+        // ── Auto-redistribute when loop detected ──
+        if (loopDetected && !_autoRedistributeDispatched) {
+          _autoRedistributeDispatched = true;
+          setState(() {
+            _isDealing = true;
+            _dealAmount = 10; // 5 cards each = 10 total visuals
+          });
+          PremiumToast.show(
+            context,
+            'Loop 5 Situation! — redistributing 5-5 cards to both players!',
+
+            duration: const Duration(seconds: 4),
+          );
+          if (isHost) {
             context.read<OnlineBloc>().add(OnlineDistributeNewCards());
-            PremiumToast.show(
-              context,
-              '🂯 Too few cards in play — redistributing cards to both players!',
-              duration: const Duration(seconds: 4),
-            );
-            return;
           }
+          return;
+        }
 
-          // Reset flag once loop is resolved
-          if (!state.unendingLoopDetected) {
-            _autoRedistributeDispatched = false;
-          }
+        // Reset flag once loop is resolved
+        if (!loopDetected) {
+          _autoRedistributeDispatched = false;
+        }
 
+        if (state is OnlinePlayerTurn) {
           // ── Disconnect countdown ──
           final allPlayers = state.allPlayers;
           final offlineHost = allPlayers.firstWhere(
@@ -184,10 +214,51 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
             PremiumToast.show(context, "${state.activePlayerName}'s Turn");
           }
           if (_selectedCard != null) setState(() => _selectedCard = null);
+
+          // ── Remote card drop animation ──
+          final currentPlayed = state.currentRound?.playedCards ?? [];
+          if (!state.isMyTurn &&
+              currentPlayed.length > _lastPlayedCards.length) {
+            final newCard = currentPlayed.last;
+            // Only show animation if the card was NOT played by us
+            if (newCard.playerId != state.myEngineId) {
+              final isPunishment =
+                  state.currentRound?.punishmentCard == newCard.card;
+              _lastPlayedCards = List.from(currentPlayed);
+              setState(() {
+                _remoteDropCard = newCard.card;
+                _remoteDropIsPunishment = isPunishment;
+                _showRemoteDrop = true;
+              });
+            } else {
+              _lastPlayedCards = List.from(currentPlayed);
+            }
+          } else {
+            _lastPlayedCards = List.from(currentPlayed);
+          }
         } else if (state is OnlineWaitingForTurn) {
           _lastActivePlayer = state.activePlayerName;
           PremiumToast.show(context, "${state.activePlayerName}'s Turn");
           if (_selectedCard != null) setState(() => _selectedCard = null);
+
+          // ── Remote card drop animation ──
+          final currentPlayed = state.currentRound?.playedCards ?? [];
+          if (currentPlayed.length > _lastPlayedCards.length) {
+            final newCard = currentPlayed.last;
+            // Only show animation if the card was NOT played by us
+            if (newCard.playerId != state.myEngineId) {
+              _lastPlayedCards = List.from(currentPlayed);
+              setState(() {
+                _remoteDropCard = newCard.card;
+                _remoteDropIsPunishment = false;
+                _showRemoteDrop = true;
+              });
+            } else {
+              _lastPlayedCards = List.from(currentPlayed);
+            }
+          } else {
+            _lastPlayedCards = List.from(currentPlayed);
+          }
         } else if (state is OnlineGameFinished) {
           _roundCompleteTimer?.cancel();
           Navigator.of(context).pushReplacement(
@@ -217,35 +288,56 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
             );
 
             try {
-              if (roomId != null && uid != null) {
+              // Fallback: if bloc hasn't loaded room yet (e.g. left during dealing),
+              // read directly from SharedPreferences
+              final prefs = await SharedPreferences.getInstance();
+              final effectiveRoomId =
+                  roomId ?? prefs.getString('active_online_room_id');
+              final effectiveUid =
+                  uid ?? prefs.getString('active_online_player_uid');
+              final effectiveName = name != 'Player'
+                  ? name
+                  : (prefs.getString('active_online_player_name') ?? 'Player');
+              final effectiveRoomCode =
+                  roomCode ?? prefs.getString('active_online_room_code');
+
+              if (effectiveRoomId != null && effectiveUid != null) {
                 final repo = bloc.repository;
-                await repo.leaveRoom(roomId, uid);
-                await repo.setDisconnectTimer(roomId, uid, name);
+                await repo.leaveRoom(effectiveRoomId, effectiveUid);
+                await repo.setDisconnectTimer(
+                  effectiveRoomId,
+                  effectiveUid,
+                  effectiveName,
+                );
                 print(
-                  'RJDBG WILLPOP: leaveRoom + setDisconnectTimer called for roomId=$roomId',
+                  'RJDBG WILLPOP: leaveRoom + setDisconnectTimer called for roomId=$effectiveRoomId',
                 );
 
-                final disconnectData = await repo.getDisconnectData(roomId);
+                final disconnectData = await repo.getDisconnectData(
+                  effectiveRoomId,
+                );
                 final expiresAt = disconnectData != null
                     ? (disconnectData['expiresAt'] as int? ?? 0)
                     : (DateTime.now().millisecondsSinceEpoch + 30000);
 
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setString('active_online_room_id', roomId);
-                if (roomCode != null)
-                  await prefs.setString('active_online_room_code', roomCode);
-                await prefs.setString('active_online_player_name', name);
-                await prefs.setString('active_online_player_uid', uid);
+                await prefs.setString('active_online_room_id', effectiveRoomId);
+                if (effectiveRoomCode != null)
+                  await prefs.setString(
+                    'active_online_room_code',
+                    effectiveRoomCode,
+                  );
+                await prefs.setString(
+                  'active_online_player_name',
+                  effectiveName,
+                );
+                await prefs.setString('active_online_player_uid', effectiveUid);
                 await prefs.setInt('active_online_expires_at', expiresAt);
                 print(
-                  'RJDBG WILLPOP: prefs re-saved, roomId=$roomId expiresAt=$expiresAt',
+                  'RJDBG WILLPOP: prefs re-saved, roomId=$effectiveRoomId expiresAt=$expiresAt',
                 );
-
-                final verify = prefs.getString('active_online_room_id');
-                print('RJDBG WILLPOP VERIFY: read-back roomId=$verify');
               } else {
                 print(
-                  'RJDBG WILLPOP: SKIPPED save — roomId or uid was null from bloc',
+                  'RJDBG WILLPOP: SKIPPED save — roomId or uid was null from both bloc and prefs',
                 );
               }
             } catch (e, st) {
@@ -270,7 +362,11 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                     width: double.infinity,
                     child: Column(
                       children: [
-                        _buildHeader(context, state),
+                        AnimatedOpacity(
+                          opacity: _isDealing ? 0.0 : 1.0,
+                          duration: const Duration(milliseconds: 500),
+                          child: _buildHeader(context, state),
+                        ),
                         const Spacer(),
                         Builder(
                           builder: (ctx) {
@@ -284,12 +380,34 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                             }
                             return _isDealing
                                 ? DealingAnimationWidget(
+                                    totalCardsToDealVisual: _dealAmount,
                                     onComplete: () {
                                       if (mounted)
                                         setState(() => _isDealing = false);
                                     },
                                   )
-                                : _buildTableCenter(state);
+                                : SizedBox(
+                                    key: _tableKey,
+                                    child: Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        _buildTableCenter(state),
+                                        if (_showRemoteDrop &&
+                                            _remoteDropCard != null)
+                                          RemoteCardDropAnimation(
+                                            card: _remoteDropCard!,
+                                            isPunishment:
+                                                _remoteDropIsPunishment,
+                                            onComplete: () {
+                                              if (mounted)
+                                                setState(
+                                                  () => _showRemoteDrop = false,
+                                                );
+                                            },
+                                          ),
+                                      ],
+                                    ),
+                                  );
                           },
                         ),
                         const Spacer(),
@@ -300,7 +418,6 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                     ),
                   ),
                 ),
-                // ── No manual redistribute button — fully automatic ──
                 // ── Player Disconnect Countdown Red Circle in the Corner ──
                 if (_hostDisconnectSeconds > 0)
                   Positioned(
@@ -560,6 +677,7 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         currentRound: state.completedRound,
         highestCard: null,
         playerNames: state.playerNames,
+        punishmentCard: state.punishmentCard,
       );
     }
     return const SizedBox(height: 220);
@@ -640,39 +758,6 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
       children: [
         if (_selectedCard != null) ...[
           if (mustPunish) ...[
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 24),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFC2C8A4),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 8,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-                border: Border.all(color: Colors.redAccent, width: 2),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
-                  SizedBox(width: 8),
-                  Text(
-                    'No matching suit\nThis card will be given as punishment',
-                    style: TextStyle(
-                      color: Color(0xFFF2D87B),
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
             ElevatedButton(
               onPressed: () {
                 _submitMove(context, state, isPunishment: true);
@@ -734,55 +819,40 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
     OnlinePlayerTurn state, {
     required bool isPunishment,
   }) {
-    print(
-      'RJDBG SUBMIT_MOVE: tapped, isPunishment=$isPunishment selectedCard=$_selectedCard',
-    );
-    if (_selectedCard == null) {
-      print('RJDBG SUBMIT_MOVE: bailing — no card selected');
+    if (_selectedCard == null) return;
+    final card = _selectedCard!;
+
+    if (!isPunishment &&
+        state.currentSuit != null &&
+        card.suit != state.currentSuit) {
+      PremiumToast.show(
+        context,
+        'You must play a ${state.currentSuit!.name} card!',
+        isError: true,
+      );
       return;
     }
-    final card = _selectedCard!;
+
     setState(() => _selectedCard = null);
 
     final bloc = context.read<OnlineBloc>();
-    print(
-      'RJDBG SUBMIT_MOVE: isHost=${state.isHost} card=${card.rank.name} of ${card.suit.name}',
-    );
-
     if (state.isHost) {
-      // Host calls engine directly
       if (isPunishment) {
         bloc.add(OnlineGivePunishment(card));
       } else {
         bloc.add(OnlinePlayCard(card));
       }
-      print('RJDBG SUBMIT_MOVE: dispatched host event');
     } else {
-      // Guest submits via RTDB pendingAction
       final roomId = bloc.currentRoomId;
       final uid = bloc.myUid;
-      print('RJDBG SUBMIT_MOVE: guest submitting, roomId=$roomId uid=$uid');
-      if (roomId == null || uid == null) {
-        print('RJDBG SUBMIT_MOVE: bailing — roomId or uid null, cannot submit');
-        return;
-      }
-      bloc.repository
-          .submitPendingAction(
-            roomId: roomId,
-            playerId: uid,
-            type: isPunishment ? 'givePunishment' : 'playCard',
-            cardSuit: card.suit.name,
-            cardRank: card.rank.name,
-          )
-          .then((_) {
-            print(
-              'RJDBG SUBMIT_MOVE: submitPendingAction completed successfully',
-            );
-          })
-          .catchError((e, st) {
-            print('RJDBG SUBMIT_MOVE ERROR: $e');
-            print('RJDBG SUBMIT_MOVE STACK: $st');
-          });
+      if (roomId == null || uid == null) return;
+      bloc.repository.submitPendingAction(
+        roomId: roomId,
+        playerId: uid,
+        type: isPunishment ? 'givePunishment' : 'playCard',
+        cardSuit: card.suit.name,
+        cardRank: card.rank.name,
+      );
     }
   }
 

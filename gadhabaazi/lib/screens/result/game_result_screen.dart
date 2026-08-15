@@ -9,6 +9,7 @@ import '../../blocs/online/online_state.dart';
 import '../../widgets/animated_background.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_strings.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../home/home_screen.dart';
 import '../online/waiting_room_screen.dart';
 import '../../engine/history/move_history.dart';
@@ -38,9 +39,11 @@ class _GameResultScreenState extends State<GameResultScreen> {
   @override
   void initState() {
     super.initState();
-    _confettiController = ConfettiController(duration: const Duration(seconds: 3));
+    _confettiController = ConfettiController(
+      duration: const Duration(seconds: 3),
+    );
     _confettiController.play();
-    
+
     // Play ending sound
     AudioService().playEndingBgm();
   }
@@ -58,6 +61,8 @@ class _GameResultScreenState extends State<GameResultScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
     return Scaffold(
       body: Stack(
         children: [
@@ -65,102 +70,89 @@ class _GameResultScreenState extends State<GameResultScreen> {
           SafeArea(
             child: SizedBox(
               width: double.infinity,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Wooden Name Plate with ending.png
-                  Stack(
-                    alignment: Alignment.center,
+              height: double.infinity,
+              // CHUNK 3: Center + mainAxisSize.min gives true vertical
+              // centering of the whole content block, regardless of
+              // SafeArea insets. If content is ever too tall for very
+              // small screens, this will overflow — swap back to the
+              // SingleChildScrollView version if that becomes an issue.
+              child: Center(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Image.asset(
-                        'assets/images/ending.png',
-                        width: MediaQuery.of(context).size.width * 0.9,
+                        'assets/images/loser.png',
+                        width: size.width * 0.75,
                         fit: BoxFit.contain,
                       ),
-                      // Position the name over the wooden plank area (lower 22% of the image)
-                      Positioned.fill(
-                        child: FractionallySizedBox(
-                          alignment: Alignment.bottomCenter,
-                          heightFactor: 0.22,
-                          child: Center(
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 20),
-                                child: Text(
-                                  widget.donkeyName.toUpperCase(),
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xFFFACC15),
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.bold,
-                                    fontFamily: 'serif',
-                                    letterSpacing: 3,
-                                    shadows: [
-                                      Shadow(
-                                        color: Colors.black87,
-                                        blurRadius: 4,
-                                        offset: Offset(2, 2),
-                                      ),
-                                    ],
-                                  ),
-                                ),
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Text(
+                          "${widget.donkeyName} is the donkey",
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.cinzel(
+                            fontSize: 26,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFFF2D87B),
+                            shadows: const [
+                              Shadow(
+                                color: Colors.black87,
+                                blurRadius: 10,
+                                offset: Offset(2, 2),
                               ),
-                            ),
+                            ],
                           ),
                         ),
                       ),
+                      const SizedBox(
+                        height: 24,
+                      ), // gap between text and buttons
+                      ImageButton(
+                        assetPath: 'assets/images/go_home.png',
+                        height: 220,
+                        width: size.width * 0.85,
+                        onTap: () {
+                          _onExit();
+                          context.read<GameBloc>().add(RestartGame());
+                          final onlineBloc = context.read<OnlineBloc>();
+                          if (onlineBloc.state is! OnlineInitial) {
+                            onlineBloc.add(OnlineLeaveRoom());
+                          }
+                          Navigator.of(context).pushAndRemoveUntil(
+                            MaterialPageRoute(
+                              builder: (_) => const HomeScreen(),
+                            ),
+                            (route) => false,
+                          );
+                        },
+                      ),
+                      if (widget.isOnlineRoom)
+                        Transform.translate(
+                          offset: const Offset(0, -50),
+                          child: ImageButton(
+                            assetPath: 'assets/images/replay.png',
+                            height: 220,
+                            width: size.width * 0.85,
+                            onTap: () {
+                              _onExit();
+                              context.read<OnlineBloc>().add(
+                                OnlineRestartRoom(),
+                              );
+                              Navigator.of(context).pushAndRemoveUntil(
+                                MaterialPageRoute(
+                                  builder: (_) => const WaitingRoomScreen(),
+                                ),
+                                (route) => false,
+                              );
+                            },
+                          ),
+                        ),
                     ],
                   ),
-                  
-                  const SizedBox(height: 60),
-                  ElevatedButton(
-                    onPressed: () {
-                      _onExit();
-                      context.read<GameBloc>().add(RestartGame());
-                      // If it's an online game, also dispatch leave room
-                      final onlineBloc = context.read<OnlineBloc>();
-                      if (onlineBloc.state is! OnlineInitial) {
-                        onlineBloc.add(OnlineLeaveRoom());
-                      }
-                      Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (_) => const HomeScreen()),
-                        (route) => false,
-                      );
-                    },
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
-                      backgroundColor: const Color(0xFFC2C8A4),
-                      foregroundColor: const Color(0xFF2C1A0E),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(AppStrings.playAgain, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  ),
-                  if (widget.isOnlineRoom) ...[
-                    const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.replay_rounded),
-                      label: const Text('Replay in Same Room', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF3A6FF7),
-                        foregroundColor: const Color(0xFFC2C8A4),
-                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                      onPressed: () {
-                        _onExit();
-                        context.read<OnlineBloc>().add(OnlineRestartRoom());
-                        Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(builder: (_) => const WaitingRoomScreen()),
-                          (route) => false,
-                        );
-                      },
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ),
@@ -177,6 +169,53 @@ class _GameResultScreenState extends State<GameResultScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class ImageButton extends StatefulWidget {
+  final String assetPath;
+  final VoidCallback onTap;
+  final double height;
+  final double? width;
+
+  const ImageButton({
+    super.key,
+    required this.assetPath,
+    required this.onTap,
+    this.height = 70.0,
+    this.width,
+  });
+
+  @override
+  State<ImageButton> createState() => _ImageButtonState();
+}
+
+class _ImageButtonState extends State<ImageButton> {
+  bool _isPressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) {
+        setState(() => _isPressed = true);
+        AudioService().playTapSound();
+      },
+      onTapUp: (_) {
+        setState(() => _isPressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _isPressed = false),
+      child: AnimatedScale(
+        scale: _isPressed ? 0.92 : 1.0,
+        duration: const Duration(milliseconds: 80),
+        child: Image.asset(
+          widget.assetPath,
+          height: widget.height,
+          width: widget.width,
+          fit: BoxFit.contain,
+        ),
       ),
     );
   }

@@ -10,6 +10,7 @@ import '../../widgets/premium_toast.dart';
 import 'online_game_screen.dart';
 import '../home/home_screen.dart';
 import '../../services/audio_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class WaitingRoomScreen extends StatelessWidget {
   const WaitingRoomScreen({super.key});
@@ -50,6 +51,13 @@ class WaitingRoomScreen extends StatelessWidget {
 
         return WillPopScope(
           onWillPop: () async {
+            // Eagerly clear session in prefs so HomeScreen doesn't see a stale rejoin room
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove('active_online_room_id');
+            await prefs.remove('active_online_room_code');
+            await prefs.remove('active_online_player_name');
+            await prefs.remove('active_online_player_uid');
+            await prefs.remove('active_online_expires_at');
             context.read<OnlineBloc>().add(OnlineLeaveRoom());
             return true;
           },
@@ -67,8 +75,14 @@ class WaitingRoomScreen extends StatelessWidget {
                           children: [
                             IconButton(
                               icon: const Icon(Icons.close, color: Color(0xFFC2C8A4)),
-                              onPressed: () {
+                              onPressed: () async {
                                 AudioService().playTapSound();
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.remove('active_online_room_id');
+                                await prefs.remove('active_online_room_code');
+                                await prefs.remove('active_online_player_name');
+                                await prefs.remove('active_online_player_uid');
+                                await prefs.remove('active_online_expires_at');
                                 context.read<OnlineBloc>().add(OnlineLeaveRoom());
                                 Navigator.of(context).pop();
                               },

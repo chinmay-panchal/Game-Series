@@ -91,9 +91,10 @@ class MyHandUpdated extends OnlineEvent {
 class RejoinExistingRoom extends OnlineEvent {
   final String roomId;
   final String playerName;
-  const RejoinExistingRoom({required this.roomId, required this.playerName});
+  final String uid;
+  const RejoinExistingRoom({required this.roomId, required this.playerName, required this.uid});
   @override
-  List<Object?> get props => [roomId, playerName];
+  List<Object?> get props => [roomId, playerName, uid];
 }
 
 class DisconnectDataUpdated extends OnlineEvent {

@@ -24,9 +24,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoading = true;
 
-  // Active online room rejoin session
   String? _rejoinRoomId;
   String? _rejoinPlayerName;
+  String? _rejoinPlayerUid;
   int _rejoinSecondsRemaining = 0;
   Timer? _countdownTimer;
 
@@ -39,20 +39,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkActiveRoomWithRetry() async {
-    // Try a few times with increasing delay — handles slow SharedPreferences
-    // commit latency seen on some physical devices.
-    for (final delayMs in [600, 900, 1200]) {
-      await Future.delayed(Duration(milliseconds: delayMs));
-      if (!mounted) return;
-      final prefs = await SharedPreferences.getInstance();
-      final roomId = prefs.getString('active_online_room_id');
-      if (roomId != null) {
-        await _checkActiveOnlineRoom();
-        return;
-      }
+    final prefs = await SharedPreferences.getInstance();
+    String? roomId = prefs.getString('active_online_room_id');
+    if (roomId != null) {
+      await _checkActiveOnlineRoom();
+      return;
     }
-    // Final attempt regardless, in case nothing was ever set
-    if (mounted) await _checkActiveOnlineRoom();
+
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+
+    roomId = prefs.getString('active_online_room_id');
+    if (roomId != null) {
+      await _checkActiveOnlineRoom();
+      return;
+    }
+
+    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
@@ -70,11 +73,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkSavedGame() async {
-    try {
-      setState(() => _isLoading = false);
-    } catch (e) {
-      setState(() => _isLoading = false);
-    }
+    // Left empty for future offline game loading logic
   }
 
   Future<void> _checkActiveOnlineRoom({bool autoRejoinIfValid = false}) async {
@@ -83,14 +82,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final roomId = prefs.getString('active_online_room_id');
       final roomCode = prefs.getString('active_online_room_code');
       final playerName = prefs.getString('active_online_player_name');
+      final playerUid = prefs.getString('active_online_player_uid');
 
       print(
-        'RJDBG 1: roomId=$roomId roomCode=$roomCode playerName=$playerName',
+        'RJDBG 1: roomId=$roomId roomCode=$roomCode playerName=$playerName playerUid=$playerUid',
       );
 
-      if (roomId == null || roomCode == null || playerName == null) {
-        print('RJDBG 2: bailing — one of roomId/roomCode/playerName is null');
-        if (mounted) setState(() => _rejoinRoomId = null);
+      if (roomId == null || roomCode == null || playerName == null || playerUid == null) {
+        print('RJDBG 2: bailing — one of roomId/roomCode/playerName/playerUid is null');
+        if (mounted) setState(() {
+          _rejoinRoomId = null;
+          _isLoading = false;
+        });
         return;
       }
       if (!mounted) {
@@ -108,7 +111,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           (room.status != 'waiting' && room.status != 'in_progress')) {
         print('RJDBG 5: bailing — room null or status not waiting/in_progress');
         if (mounted) {
-          setState(() => _rejoinRoomId = null);
+          setState(() {
+            _rejoinRoomId = null;
+            _isLoading = false;
+          });
           _clearSavedOnlineSession();
         }
         return;
@@ -139,7 +145,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (secondsRemaining <= 0) {
         print('RJDBG 9: bailing — secondsRemaining <= 0');
         if (mounted) {
-          setState(() => _rejoinRoomId = null);
+          setState(() {
+            _rejoinRoomId = null;
+            _isLoading = false;
+          });
           _clearSavedOnlineSession();
         }
         return;
@@ -152,7 +161,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         setState(() {
           _rejoinRoomId = roomId;
           _rejoinPlayerName = playerName;
+          _rejoinPlayerUid = playerUid;
           _rejoinSecondsRemaining = secondsRemaining;
+          _isLoading = false;
         });
         _startCountdownTimer();
 
@@ -167,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _executeRejoin() async {
-    if (_rejoinRoomId == null) return;
+    if (_rejoinRoomId == null || _rejoinPlayerUid == null) return;
     AudioService().stopBgm();
     _countdownTimer?.cancel();
     final prefs = await SharedPreferences.getInstance();
@@ -177,6 +188,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         RejoinExistingRoom(
           roomId: _rejoinRoomId!,
           playerName: _rejoinPlayerName ?? 'Player',
+          uid: _rejoinPlayerUid!,
         ),
       );
       Navigator.of(context)
@@ -397,26 +409,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Positioned(
                   top: 16,
                   right: 16,
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFFD3AC47),
-                        width: 2,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: const Color(0xFFD3AC47),
+                            width: 2,
+                          ),
+                          color: const Color(0xFF1A2C1A).withOpacity(0.85),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '$_rejoinSecondsRemaining',
+                          style: const TextStyle(
+                            color: Color(0xFFF2D87B),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                      color: const Color(0xFF1A2C1A).withOpacity(0.85),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '$_rejoinSecondsRemaining',
-                      style: const TextStyle(
-                        color: Color(0xFFF2D87B),
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () {
+                          _countdownTimer?.cancel();
+                          setState(() {
+                            _rejoinSecondsRemaining = 0;
+                            _rejoinRoomId = null;
+                          });
+                          _clearSavedOnlineSession();
+                        },
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.redAccent.withOpacity(0.85),
+                          ),
+                          alignment: Alignment.center,
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
             ],

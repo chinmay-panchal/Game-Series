@@ -57,23 +57,25 @@ class OnlinePlayerTurn extends OnlineState {
   final PlayedCard? highestCard;
   final List<OnlinePlayerModel> allPlayers;
   final Map<String, String> playerNames;
-  final bool isFirstTurn;
   final bool isHost;
+  final bool isFirstTurn;
   final bool unendingLoopDetected;
+  final String myEngineId;
 
   const OnlinePlayerTurn({
     required this.myName,
     required this.activePlayerName,
     required this.isMyTurn,
     required this.myHand,
-    required this.allPlayers,
-    required this.playerNames,
-    required this.isHost,
     this.currentRound,
     this.currentSuit,
     this.highestCard,
+    required this.allPlayers,
+    required this.playerNames,
+    required this.isHost,
     this.isFirstTurn = false,
     this.unendingLoopDetected = false,
+    required this.myEngineId,
   });
 
   @override
@@ -90,6 +92,7 @@ class OnlinePlayerTurn extends OnlineState {
         isHost,
         isFirstTurn,
         unendingLoopDetected,
+        myEngineId,
       ];
 }
 
@@ -145,22 +148,37 @@ class OnlineGameFinished extends OnlineState {
 
 /// Waiting for the remote player to take their turn
 class OnlineWaitingForTurn extends OnlineState {
+  final String myName;
   final String activePlayerName;
   final List<PlayingCard> myHand;
   final RoundModel? currentRound;
-  final List<OnlinePlayerModel> allPlayers;
   final Map<String, String> playerNames;
+  final bool isHost;
+  final String myEngineId;
+  final bool unendingLoopDetected;
 
   const OnlineWaitingForTurn({
+    required this.myName,
     required this.activePlayerName,
     required this.myHand,
-    required this.allPlayers,
-    required this.playerNames,
     this.currentRound,
+    required this.playerNames,
+    required this.isHost,
+    required this.myEngineId,
+    this.unendingLoopDetected = false,
   });
 
   @override
-  List<Object?> get props => [activePlayerName, myHand, currentRound, allPlayers, playerNames];
+  List<Object?> get props => [
+        myName,
+        activePlayerName,
+        myHand,
+        currentRound,
+        playerNames,
+        isHost,
+        myEngineId,
+        unendingLoopDetected,
+      ];
 }
 
 class OnlineRedistributingCards extends OnlineState {

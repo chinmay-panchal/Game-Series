@@ -168,7 +168,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         return;
       }
       _room = room;
-      _myUid = repository.currentUid ?? await repository.signInAnonymously();
+      _myUid = event.uid;
       _myName = event.playerName;
       _isHost = (_room!.hostId == _myUid);
       print(
@@ -794,6 +794,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
             isHost: true,
             isFirstTurn: gs.completedRounds.isEmpty && gs.currentRound == null,
             unendingLoopDetected: gs.unendingLoopDetected,
+            myEngineId: myEnginePlayer.id,
           ),
         );
         break;
@@ -924,6 +925,8 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
           .name;
     }
 
+    final myIdx = playerOrder.indexOf(_myUid!);
+
     switch (phase) {
       case 'playerTurn':
       case 'turnTransition':
@@ -945,16 +948,20 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
               isFirstTurn: completedRounds.isEmpty && currentRound == null,
               unendingLoopDetected:
                   data['unendingLoopDetected'] as bool? ?? false,
+              myEngineId: 'p$myIdx',
             ),
           );
         } else {
           emit(
             OnlineWaitingForTurn(
+              myName: _myName ?? '',
               activePlayerName: activePlayer.name,
               myHand: _myHand,
               currentRound: currentRound,
-              allPlayers: _players,
               playerNames: pNames,
+              isHost: false,
+              myEngineId: 'p$myIdx',
+              unendingLoopDetected: data['unendingLoopDetected'] as bool? ?? false,
             ),
           );
         }
@@ -989,11 +996,13 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         } else {
           emit(
             OnlineWaitingForTurn(
+              myName: _myName ?? '',
               activePlayerName: activePlayer.name,
               myHand: _myHand,
               currentRound: currentRound,
-              allPlayers: _players,
               playerNames: pNames,
+              isHost: false,
+              myEngineId: 'p$myIdx',
             ),
           );
         }

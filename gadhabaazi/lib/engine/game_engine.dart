@@ -217,11 +217,11 @@ class GameEngine {
 
       return MoveResult(
         gameState: newState.copyWith(
-          phase: GamePhase.gameOver,
+          phase: GamePhase.roundEnd, // Show last cards before game over
           donkeyPlayerId: donkeyId,
           history: finalHistory,
         ),
-        moveType: MoveType.gameCompleted,
+        moveType: MoveType.cardPlayed, // Treat as normal round end for now
       );
     }
 
@@ -414,6 +414,13 @@ class GameEngine {
 
     if (state.phase == GamePhase.gameOver) {
       return MoveResult(gameState: state, moveType: MoveType.gameCompleted);
+    }
+
+    if (state.donkeyPlayerId != null) {
+      return MoveResult(
+        gameState: state.copyWith(phase: GamePhase.gameOver),
+        moveType: MoveType.gameCompleted,
+      );
     }
 
     int nextIndex = state.activePlayerIndex;

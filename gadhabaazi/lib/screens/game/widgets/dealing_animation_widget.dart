@@ -5,8 +5,13 @@ import '../../../services/audio_service.dart';
 
 class DealingAnimationWidget extends StatefulWidget {
   final VoidCallback onComplete;
+  final int totalCardsToDealVisual;
 
-  const DealingAnimationWidget({super.key, required this.onComplete});
+  const DealingAnimationWidget({
+    super.key,
+    required this.onComplete,
+    this.totalCardsToDealVisual = 24,
+  });
 
   @override
   State<DealingAnimationWidget> createState() => _DealingAnimationWidgetState();
@@ -18,7 +23,6 @@ class _DealingAnimationWidgetState extends State<DealingAnimationWidget> with Ti
   
   bool _isShuffling = true;
   int _cardsDealt = 0;
-  final int _totalCardsToDealVisual = 24; // Visual representation of dealing 24 cards
 
   @override
   void initState() {
@@ -50,7 +54,7 @@ class _DealingAnimationWidgetState extends State<DealingAnimationWidget> with Ti
     // 2. Deal cards one by one rapidly
     _dealController.forward();
     
-    for (int i = 0; i < _totalCardsToDealVisual; i++) {
+    for (int i = 0; i < widget.totalCardsToDealVisual; i++) {
       if (!mounted) return;
       setState(() {
         _cardsDealt++;
@@ -83,7 +87,7 @@ class _DealingAnimationWidgetState extends State<DealingAnimationWidget> with Ti
         alignment: Alignment.center,
         children: [
           // The main deck in the center
-          if (_cardsDealt < _totalCardsToDealVisual)
+          if (_cardsDealt < widget.totalCardsToDealVisual)
             AnimatedBuilder(
               animation: _shuffleController,
               builder: (context, child) {
@@ -145,7 +149,7 @@ class _DealingAnimationWidgetState extends State<DealingAnimationWidget> with Ti
                 style: TextStyle(color: const Color(0xFFC2C8A4), fontSize: 20, fontWeight: FontWeight.bold),
               ),
             )
-          else if (_cardsDealt < _totalCardsToDealVisual)
+          else if (_cardsDealt < widget.totalCardsToDealVisual)
             const Positioned(
               bottom: -60,
               child: Text(
