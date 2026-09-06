@@ -1,4 +1,4 @@
-package com.example.gadhabaazi
+package com.chinmaypanchal.gadhabaazi
 
 import io.flutter.embedding.android.FlutterActivity
 

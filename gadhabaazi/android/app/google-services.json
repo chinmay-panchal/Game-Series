@@ -1,10 +1,30 @@
 {
   "project_info": {
     "project_number": "680291484173",
+    "firebase_url": "https://gadhabaazi-default-rtdb.firebaseio.com",
     "project_id": "gadhabaazi",
     "storage_bucket": "gadhabaazi.firebasestorage.app"
   },
   "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:680291484173:android:9e41bec72bd24d1f44cb44",
+        "android_client_info": {
+          "package_name": "com.chinmaypanchal.gadhabaazi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBJ62ZWsbIvDGG6old4sXpRhsAvstoRrqk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
     {
       "client_info": {
         "mobilesdk_app_id": "1:680291484173:android:e2a343bdad6f29d844cb44",
