@@ -22,7 +22,7 @@ class _OnlineModeScreenState extends State<OnlineModeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocListener<OnlineBloc, OnlineState>(
+    return BlocConsumer<OnlineBloc, OnlineState>(
       listener: (context, state) {
         if (state is OnlineError) {
           PremiumToast.show(context, state.message, isError: true);
@@ -33,38 +33,101 @@ class _OnlineModeScreenState extends State<OnlineModeScreen> {
           );
         }
       },
-      child: Scaffold(
-        body: AnimatedBackground(
-          child: SafeArea(
-            child: Column(
-              children: [
-                const SizedBox(height: 32),
-                const Spacer(),
-                Image.asset('assets/images/starting.png', height: 240),
-                const SizedBox(height: 20),
-                _OnlineOptionCard(
-                  assetPath: 'assets/images/create_room.png',
-                  onTap: () => _showCreateDialog(context),
-                ),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.topCenter,
-                  heightFactor: 0.5,
-                  child: Transform.translate(
-                    offset: const Offset(0, -120),
-                    child: _OnlineOptionCard(
-                      assetPath: 'assets/images/join_room.png',
-                      onTap: () => _showJoinDialog(context),
+      builder: (context, state) {
+        final isLoading = state is OnlineLoading;
+        final loadingMessage = isLoading ? state.message : 'Please wait...';
+
+        final screenWidth = MediaQuery.of(context).size.width;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final double buttonWidth = (screenWidth * 0.85).clamp(240.0, 360.0);
+        final double buttonHeight = buttonWidth / 2.5;
+        final double logoHeight = (screenHeight * 0.28).clamp(140.0, 220.0);
+
+        return Stack(
+          children: [
+            Scaffold(
+              body: AnimatedBackground(
+                child: SafeArea(
+                  child: SizedBox.expand(
+                    child: Center(
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Image.asset(
+                              'assets/images/starting.png',
+                              height: logoHeight,
+                              fit: BoxFit.contain,
+                            ),
+                            const SizedBox(height: 24),
+                            _OnlineOptionCard(
+                              assetPath: 'assets/images/create_room.png',
+                              width: buttonWidth,
+                              height: buttonHeight,
+                              onTap: isLoading ? () {} : () => _showCreateDialog(context),
+                            ),
+                            const SizedBox(height: 20),
+                            _OnlineOptionCard(
+                              assetPath: 'assets/images/join_room.png',
+                              width: buttonWidth,
+                              height: buttonHeight,
+                              onTap: isLoading ? () {} : () => _showJoinDialog(context),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
-                const Spacer(),
-                const SizedBox(height: 32),
-              ],
+              ),
             ),
-          ),
-        ),
-      ),
+            if (isLoading)
+              Container(
+                color: Colors.black.withOpacity(0.7),
+                alignment: Alignment.center,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A2C1A),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFD3AC47), width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.5),
+                          blurRadius: 20,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(
+                          color: Color(0xFFF2D87B),
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          loadingMessage,
+                          style: const TextStyle(
+                            color: Color(0xFFF2D87B),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -265,10 +328,14 @@ class _OnlineModeScreenState extends State<OnlineModeScreen> {
 class _OnlineOptionCard extends StatefulWidget {
   final String assetPath;
   final VoidCallback onTap;
+  final double height;
+  final double width;
 
   const _OnlineOptionCard({
     required this.assetPath,
     required this.onTap,
+    this.height = 110.0,
+    this.width = 300.0,
   });
 
   @override
@@ -281,6 +348,7 @@ class _OnlineOptionCardState extends State<_OnlineOptionCard> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTapDown: (_) {
         setState(() => _isPressed = true);
         AudioService().playTapSound();
@@ -291,13 +359,17 @@ class _OnlineOptionCardState extends State<_OnlineOptionCard> {
       },
       onTapCancel: () => setState(() => _isPressed = false),
       child: AnimatedScale(
-        scale: _isPressed ? 0.92 : 1.0,
+        scale: _isPressed ? 0.94 : 1.0,
         duration: const Duration(milliseconds: 80),
-        child: Image.asset(
-          widget.assetPath,
-          height: 220,
-          width: MediaQuery.of(context).size.width * 0.85,
-          fit: BoxFit.contain,
+        child: SizedBox(
+          width: widget.width,
+          height: widget.height,
+          child: Image.asset(
+            widget.assetPath,
+            height: widget.height,
+            width: widget.width,
+            fit: BoxFit.contain,
+          ),
         ),
       ),
     );

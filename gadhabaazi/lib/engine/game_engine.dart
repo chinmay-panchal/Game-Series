@@ -170,7 +170,7 @@ class GameEngine {
         .where(
           (p) =>
               p.hand.isNotEmpty ||
-              currentRound!.playedCards.any((c) => c.playerId == p.id),
+              currentRound.playedCards.any((c) => c.playerId == p.id),
         )
         .length;
 
@@ -450,42 +450,48 @@ class GameEngine {
     );
   }
 
+  /// Removes a disconnected player and distributes their cards clockwise to remaining active players.
+  ///
+  /// Turn rules after removal:
+  /// 1. If disconnected player had the highest rank card this round → clockwise next player leads.
+  /// 2. If disconnected player hadn't played yet this round → clockwise next player takes their turn.
+  /// 3. If disconnected player already played (not highest) → round checks for completion.
+  /// 4. Distribution is one-by-one clockwise starting from the first player after disconnected player.
   MoveResult redistributePlayerCards(GameState state, String disconnectedPlayerId) {
     int discIdx = state.players.indexWhere((p) => p.id == disconnectedPlayerId);
     if (discIdx == -1) {
       return MoveResult(gameState: state, moveType: MoveType.cardPlayed);
     }
 
-    Player disconnectedPlayer = state.players[discIdx];
-    List<PlayingCard> cardsToDistribute = List.from(disconnectedPlayer.hand);
+    final disconnectedPlayer = state.players[discIdx];
+    final List<PlayingCard> cardsToDistribute = List.from(disconnectedPlayer.hand);
 
     List<Player> newPlayers = List.from(state.players);
 
-    // Empty the disconnected player's hand and mark as non-active/finished
+    // Empty the disconnected player's hand
     newPlayers[discIdx] = newPlayers[discIdx].copyWith(hand: []);
 
-    // Get active remaining players (those with hands or still playing)
-    List<int> activeRemainingIndices = [];
-    for (int i = 0; i < newPlayers.length; i++) {
-      if (i != discIdx && !state.finishedPlayerIds.contains(newPlayers[i].id)) {
-        activeRemainingIndices.add(i);
+    // Build clockwise-ordered list of active remaining player indices
+    // starting from the player AFTER the disconnected player
+    final int totalPlayers = newPlayers.length;
+    List<int> clockwiseRemainingIndices = [];
+    for (int offset = 1; offset < totalPlayers; offset++) {
+      final int idx = (discIdx + offset) % totalPlayers;
+      if (!state.finishedPlayerIds.contains(newPlayers[idx].id)) {
+        clockwiseRemainingIndices.add(idx);
       }
     }
 
-    // Check if only 1 active player remains
-    if (activeRemainingIndices.length <= 1) {
-      String? winnerId;
-      if (activeRemainingIndices.isNotEmpty) {
-        winnerId = newPlayers[activeRemainingIndices.first].id;
-      }
-      List<String> newFinished = List.from(state.finishedPlayerIds);
-      if (winnerId != null && !newFinished.contains(winnerId)) {
-        newFinished.insert(0, winnerId);
+    // --- Edge case: only 0 or 1 active players remain → game over ---
+    if (clockwiseRemainingIndices.length <= 1) {
+      final List<String> newFinished = List.from(state.finishedPlayerIds);
+      if (clockwiseRemainingIndices.isNotEmpty) {
+        final winnerId = newPlayers[clockwiseRemainingIndices.first].id;
+        if (!newFinished.contains(winnerId)) newFinished.insert(0, winnerId);
       }
       if (!newFinished.contains(disconnectedPlayerId)) {
         newFinished.add(disconnectedPlayerId);
       }
-
       return MoveResult(
         gameState: state.copyWith(
           players: newPlayers,
@@ -497,48 +503,80 @@ class GameEngine {
       );
     }
 
-    // Distribute cards one-by-one to remaining active players
-    int recipientIdx = 0;
-    while (cardsToDistribute.isNotEmpty) {
-      int targetPlayerIdx = activeRemainingIndices[recipientIdx % activeRemainingIndices.length];
-      PlayingCard card = cardsToDistribute.removeAt(0);
-      List<PlayingCard> updatedHand = List.from(newPlayers[targetPlayerIdx].hand)..add(card);
-      
-      // Sort updated hand
+    // --- Distribute cards one-by-one clockwise ---
+    int recipientCursor = 0;
+    for (final card in cardsToDistribute) {
+      final int targetIdx =
+          clockwiseRemainingIndices[recipientCursor % clockwiseRemainingIndices.length];
+      final List<PlayingCard> updatedHand = List.from(newPlayers[targetIdx].hand)..add(card);
       updatedHand.sort((a, b) {
-        if (a.suit.index != b.suit.index) {
-          return a.suit.index.compareTo(b.suit.index);
-        }
+        if (a.suit.index != b.suit.index) return a.suit.index.compareTo(b.suit.index);
         return a.rank.index.compareTo(b.rank.index);
       });
-      
-      newPlayers[targetPlayerIdx] = newPlayers[targetPlayerIdx].copyWith(hand: updatedHand);
-      recipientIdx++;
+      newPlayers[targetIdx] = newPlayers[targetIdx].copyWith(hand: updatedHand);
+      recipientCursor++;
     }
 
-    // Move activePlayerIndex if it was currently on the disconnected player
-    int nextActiveIdx = state.activePlayerIndex;
-    if (state.activePlayerIndex == discIdx) {
-      nextActiveIdx = (state.activePlayerIndex + 1) % newPlayers.length;
-      while (nextActiveIdx == discIdx || state.finishedPlayerIds.contains(newPlayers[nextActiveIdx].id)) {
-        nextActiveIdx = (nextActiveIdx + 1) % newPlayers.length;
+    // --- Determine who plays next based on round state ---
+    int nextActiveIdx;
+    RoundModel? updatedRound = state.currentRound;
+
+    if (updatedRound == null) {
+      // Between rounds — first clockwise player leads
+      nextActiveIdx = clockwiseRemainingIndices.first;
+    } else {
+      // Cards already played on the table MUST REMAIN on the table!
+      final Set<String> playedPlayerIds =
+          updatedRound.playedCards.map((pc) => pc.playerId).toSet();
+      final Set<String> remainingActiveIds =
+          clockwiseRemainingIndices.map((i) => newPlayers[i].id).toSet();
+
+      final bool allRemainingPlayed =
+          remainingActiveIds.every((id) => playedPlayerIds.contains(id));
+
+      if (allRemainingPlayed && updatedRound.playedCards.isNotEmpty) {
+        final highestCard = _moveRules.currentHighestCard(updatedRound.playedCards);
+        if (highestCard != null && highestCard.playerId == disconnectedPlayerId) {
+          // If the disconnected player had the highest card, clockwise next player leads the next round
+          final nextLeaderId = newPlayers[clockwiseRemainingIndices.first].id;
+          updatedRound = updatedRound.copyWith(winnerId: nextLeaderId);
+        } else if (highestCard != null) {
+          updatedRound = updatedRound.copyWith(winnerId: highestCard.playerId);
+        }
+
+        final tempState = state.copyWith(
+          players: newPlayers,
+          currentRound: updatedRound,
+        );
+        return _completeRound(tempState);
+      } else {
+        // Continue round on the table — find next clockwise player who hasn't played yet
+        nextActiveIdx = clockwiseRemainingIndices.first;
+        for (final idx in clockwiseRemainingIndices) {
+          if (!playedPlayerIds.contains(newPlayers[idx].id)) {
+            nextActiveIdx = idx;
+            break;
+          }
+        }
       }
     }
 
-    MoveHistory newHistory = state.history.record(
+    final newHistory = state.history.record(
       'system',
-      'Player ${disconnectedPlayer.name} disconnected. Remaining cards distributed to active players.',
+      'Player ${disconnectedPlayer.name} left. Cards distributed clockwise to remaining players.',
     );
 
     return MoveResult(
       gameState: state.copyWith(
         players: newPlayers,
         activePlayerIndex: nextActiveIdx,
+        currentRound: updatedRound,
         history: newHistory,
         phase: GamePhase.playerTurn,
       ),
       moveType: MoveType.cardPlayed,
     );
   }
+
 }
 

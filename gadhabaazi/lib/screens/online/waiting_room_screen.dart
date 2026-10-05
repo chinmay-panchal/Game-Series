@@ -12,8 +12,33 @@ import '../home/home_screen.dart';
 import '../../services/audio_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class WaitingRoomScreen extends StatelessWidget {
+class WaitingRoomScreen extends StatefulWidget {
   const WaitingRoomScreen({super.key});
+
+  @override
+  State<WaitingRoomScreen> createState() => _WaitingRoomScreenState();
+}
+
+class _WaitingRoomScreenState extends State<WaitingRoomScreen> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    context.read<OnlineBloc>().add(OnlineReassertPresence());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      context.read<OnlineBloc>().add(OnlineReassertPresence());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,8 +71,17 @@ class WaitingRoomScreen extends StatelessWidget {
         }
 
         final room = state.room;
-        final players = state.players;
+        // In the lobby, only active online players are shown (offline players are removed so slots are freed)
+        final activePlayers = state.players.where((p) => p.isOnline).toList();
         final isHost = state.isHost;
+        final canStart = activePlayers.length >= 2;
+
+        String startButtonText;
+        if (activePlayers.length < 2) {
+          startButtonText = 'Waiting for players...';
+        } else {
+          startButtonText = '▶  Start Game';
+        }
 
         return WillPopScope(
           onWillPop: () async {
@@ -144,70 +178,109 @@ class WaitingRoomScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 12),
-                       Text(
-                         '${players.length}/${room.maxPlayers} players joined',
-                         style: const TextStyle(color: Color(0xFFF2D87B), fontSize: 14, fontWeight: FontWeight.w600),
-                       ),
+                      Text(
+                        '${activePlayers.length}/${room.maxPlayers} players joined',
+                        style: const TextStyle(color: Color(0xFFF2D87B), fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
                       const SizedBox(height: 32),
 
                       // Player list
                       Expanded(
                         child: ListView.builder(
                           padding: const EdgeInsets.symmetric(horizontal: 24),
-                          itemCount: players.length,
+                          itemCount: activePlayers.length,
                           itemBuilder: (ctx, i) {
-                            final p = players[i];
-                            final isFirstPlayer = i == 0;
+                            final p = activePlayers[i];
+                            final isPlayerHost = room.hostId.isNotEmpty
+                                ? p.uid == room.hostId
+                                : (isHost && i == 0);
                             return _PlayerTile(
                               name: p.name,
-                              isHost: isFirstPlayer,
-                              isOnline: p.isOnline,
+                              isHost: isPlayerHost,
+                              isOnline: true,
                             );
                           },
                         ),
                       ),
 
                       const SizedBox(height: 24),
-                      if (isHost) ...[
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed: players.length >= 2
-                                  ? () {
-                                      AudioService().playTapSound();
-                                      context.read<OnlineBloc>().add(HostStartGame());
-                                    }
-                                  : null,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.goldAccent,
-                                foregroundColor: const Color(0xFF2C1A0E),
-                                disabledBackgroundColor: const Color(0x1FC2C8A4),
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 18),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14)),
-                                textStyle: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isHost)
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  onPressed: canStart
+                                      ? () {
+                                          AudioService().playTapSound();
+                                          context
+                                              .read<OnlineBloc>()
+                                              .add(HostStartGame());
+                                        }
+                                      : null,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.goldAccent,
+                                    foregroundColor: const Color(0xFF2C1A0E),
+                                    disabledBackgroundColor:
+                                        const Color(0x1FC2C8A4),
+                                    disabledForegroundColor:
+                                        const Color(0x80C2C8A4),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 18),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(14)),
+                                    textStyle: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                  child: Text(startButtonText),
+                                ),
+                              )
+                            else
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 18, horizontal: 16),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x1FC2C8A4),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: const Color(0x33C2C8A4),
+                                  ),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFFF2D87B),
+                                      ),
+                                    ),
+                                    SizedBox(width: 12),
+                                    Flexible(
+                                      child: Text(
+                                        'Waiting for the host to start the game…',
+                                        style: TextStyle(
+                                          color: Color(0xFFC2C8A4),
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                              child: Text(players.length >= 2
-                                  ? '▶  Start Game'
-                                  : 'Waiting for players...'),
-                            ),
-                          ),
+                          ],
                         ),
-                       ] else ...[
-                         const Padding(
-                           padding: EdgeInsets.all(16),
-                           child: Text(
-                             'Waiting for the host to start the game…',
-                             style: TextStyle(color: Color(0xFFC2C8A4), fontSize: 14),
-                             textAlign: TextAlign.center,
-                           ),
-                         ),
-                      ],
+                      ),
                       const SizedBox(height: 32),
                     ],
                   ),

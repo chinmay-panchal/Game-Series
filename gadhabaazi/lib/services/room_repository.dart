@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,8 +9,15 @@ import '../models/online_room_model.dart';
 
 /// Handles all Firebase Realtime Database and Auth operations for online rooms.
 class RoomRepository {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseDatabase _db = FirebaseDatabase.instance;
+  final FirebaseAuth? _injectedAuth;
+  final FirebaseDatabase? _injectedDb;
+
+  RoomRepository({FirebaseAuth? auth, FirebaseDatabase? db})
+      : _injectedAuth = auth,
+        _injectedDb = db;
+
+  FirebaseAuth get _auth => _injectedAuth ?? FirebaseAuth.instance;
+  FirebaseDatabase get _db => _injectedDb ?? FirebaseDatabase.instance;
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
 
@@ -34,8 +42,8 @@ class RoomRepository {
       if (_auth.currentUser == null) {
         await _auth.signInAnonymously();
       }
-    } catch (e, st) {
-      print('CHECK_ACTIVE_ROOM_ERROR: $e');
+    } catch (e) {
+      debugPrint('CHECK_ACTIVE_ROOM_ERROR: $e');
     }
 
     return storedId;
@@ -81,6 +89,7 @@ class RoomRepository {
       'name': hostName,
       'isOnline': true,
       'joinedAt': now,
+      'lastSeen': now,
     });
 
     // Register room code lookup
@@ -109,22 +118,37 @@ class RoomRepository {
     }
     final roomId = codeSnap.value as String;
 
-    // Check room status
+    // Check room meta
     final metaSnap = await _db.ref('rooms/$roomId/meta').get();
     if (!metaSnap.exists) throw Exception('Room data missing.');
     final meta = metaSnap.value as Map<Object?, Object?>;
     final status = meta['status'] as String? ?? 'waiting';
+
+    if (status == 'completed') {
+      throw Exception('This game has already ended.');
+    }
     if (status != 'waiting') {
-      throw Exception('This game has already started. You cannot join now.');
+      throw Exception('This game is already in progress. You cannot join.');
     }
 
-    // Check if room is full
     final playersSnap = await _db.ref('rooms/$roomId/players').get();
-    final currentCount = playersSnap.exists
-        ? (playersSnap.value as Map<Object?, Object?>).length
-        : 0;
+    final playersMap = playersSnap.exists
+        ? playersSnap.value as Map<Object?, Object?>
+        : <Object?, Object?>{};
+
+    // Check if this device is already in the room (same persistent UID)
+    if (playersMap.containsKey(uid)) {
+      // Already in room — just mark online again
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final playerRef = _db.ref('rooms/$roomId/players/$uid');
+      await playerRef.update({'isOnline': true, 'joinedAt': now, 'lastSeen': now});
+      await playerRef.onDisconnect().update({'isOnline': false});
+      return OnlineRoomModel.fromJson(roomId, meta);
+    }
+
+    // New player — check capacity
     final maxPlayers = meta['maxPlayers'] as int? ?? 4;
-    if (currentCount >= maxPlayers) {
+    if (playersMap.length >= maxPlayers) {
       throw Exception('Room is full ($maxPlayers/$maxPlayers players).');
     }
 
@@ -135,9 +159,8 @@ class RoomRepository {
       'name': playerName,
       'isOnline': true,
       'joinedAt': now,
+      'lastSeen': now,
     });
-
-    // Set onDisconnect
     await playerRef.onDisconnect().update({'isOnline': false});
 
     return OnlineRoomModel.fromJson(roomId, meta);
@@ -164,6 +187,13 @@ class RoomRepository {
   Stream<String> roomStatusStream(String roomId) {
     return _db.ref('rooms/$roomId/meta/status').onValue.map((event) {
       return event.snapshot.value as String? ?? 'waiting';
+    });
+  }
+
+  Stream<Map<Object?, Object?>?> roomMetaStream(String roomId) {
+    return _db.ref('rooms/$roomId/meta').onValue.map((event) {
+      if (!event.snapshot.exists) return null;
+      return event.snapshot.value as Map<Object?, Object?>?;
     });
   }
 
@@ -261,37 +291,29 @@ class RoomRepository {
   // ─── Complete game ─────────────────────────────────────────────────────────
 
   Future<void> completeRoom(String roomId) async {
-    // Just mark as completed so it stops appearing as active.
-    // We do NOT delete it here, otherwise guests won't receive the gameOver state.
-    await _db.ref('rooms/$roomId/meta/status').set('completed');
+    // Mark as completed and phase as gameOver so it stops appearing as active.
+    final updates = <String, dynamic>{
+      'rooms/$roomId/meta/status': 'completed',
+      'rooms/$roomId/gameState/phase': 'gameOver',
+    };
+    await _db.ref().update(updates);
   }
 
-  // ─── Disconnect & Rejoin Management ─────────────────────────────────────
+  // ─── Presence Management ─────────────────────────────────────────────────
 
-  Stream<Map<Object?, Object?>?> disconnectDataStream(String roomId) {
-    return _db.ref('rooms/$roomId/disconnectData').onValue.map((event) {
-      if (!event.snapshot.exists) return null;
-      return event.snapshot.value as Map<Object?, Object?>?;
-    });
-  }
-
-  Future<void> setDisconnectTimer(
-    String roomId,
-    String uid,
-    String name,
-  ) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final expiresAt = now + 30000; // 30 seconds timer
-    await _db.ref('rooms/$roomId/disconnectData').set({
-      'disconnectedUid': uid,
-      'disconnectedName': name,
-      'disconnectedAt': now,
-      'expiresAt': expiresAt,
-    });
-  }
-
-  Future<void> clearDisconnectData(String roomId) async {
-    await _db.ref('rooms/$roomId/disconnectData').remove();
+  /// Mark a player as online again (used by reassertPresence on reconnect and restart logic).
+  Future<void> rejoinRoom(String roomId, String uid, [String? name]) async {
+    final playerRef = _db.ref('rooms/$roomId/players/$uid');
+    final updates = <String, dynamic>{
+      'isOnline': true,
+      'uid': uid,
+      'lastActive': ServerValue.timestamp,
+    };
+    if (name != null && name.isNotEmpty) {
+      updates['name'] = name;
+    }
+    await playerRef.update(updates);
+    await playerRef.onDisconnect().update({'isOnline': false});
   }
 
   Future<OnlineRoomModel?> getActiveRoom(String roomId) async {
@@ -301,19 +323,6 @@ class RoomRepository {
     final status = meta['status'] as String? ?? '';
     if (status != 'in_progress' && status != 'waiting') return null;
     return OnlineRoomModel.fromJson(roomId, meta);
-  }
-
-  Future<Map<Object?, Object?>?> getDisconnectData(String roomId) async {
-    final snap = await _db.ref('rooms/$roomId/disconnectData').get();
-    if (!snap.exists) return null;
-    return snap.value as Map<Object?, Object?>;
-  }
-
-  Future<void> rejoinRoom(String roomId, String uid) async {
-    await _db.ref('rooms/$roomId/players/$uid/isOnline').set(true);
-    await clearDisconnectData(roomId);
-    final playerRef = _db.ref('rooms/$roomId/players/$uid');
-    await playerRef.onDisconnect().update({'isOnline': false});
   }
 
   // ─── Connection Monitoring ───────────────────────────────────────────────
@@ -345,13 +354,41 @@ class RoomRepository {
     }).toList();
   }
 
-  Future<void> restartRoom(String roomId) async {
+  Future<void> restartRoom(String roomId, [String? initiatorUid, String? initiatorName]) async {
     final updates = <String, dynamic>{};
     updates['rooms/$roomId/meta/status'] = 'waiting';
     updates['rooms/$roomId/gameState'] = null;
     updates['rooms/$roomId/pendingAction'] = null;
     updates['rooms/$roomId/disconnectData'] = null;
+
+    if (initiatorUid != null) {
+      updates['rooms/$roomId/meta/hostId'] = initiatorUid;
+      updates['rooms/$roomId/players/$initiatorUid/isOnline'] = true;
+      updates['rooms/$roomId/players/$initiatorUid/uid'] = initiatorUid;
+      if (initiatorName != null && initiatorName.isNotEmpty) {
+        updates['rooms/$roomId/players/$initiatorUid/name'] = initiatorName;
+      }
+      updates['rooms/$roomId/players/$initiatorUid/lastActive'] = ServerValue.timestamp;
+
+      final playersSnap = await _db.ref('rooms/$roomId/players').get();
+      if (playersSnap.exists) {
+        final pMap = playersSnap.value as Map<Object?, Object?>;
+        for (final uid in pMap.keys) {
+          final strUid = uid.toString();
+          if (strUid != initiatorUid) {
+            // Keep their name and existing info intact; only set isOnline: false until they hit Replay
+            updates['rooms/$roomId/players/$strUid/isOnline'] = false;
+          }
+        }
+      }
+    }
+
     await _db.ref().update(updates);
+
+    if (initiatorUid != null) {
+      final playerRef = _db.ref('rooms/$roomId/players/$initiatorUid');
+      await playerRef.onDisconnect().update({'isOnline': false});
+    }
   }
 
   Future<void> deleteRoom(String roomId, String roomCode) async {
@@ -360,6 +397,48 @@ class RoomRepository {
   }
 
   Future<void> leaveRoom(String roomId, String uid) async {
-    await _db.ref('rooms/$roomId/players/$uid/isOnline').set(false);
+    await removePlayer(roomId, uid);
+  }
+
+  Future<void> forfeitRoom(String roomId, String forfeitingUid, String forfeitingName) async {
+    final updates = <String, dynamic>{
+      'rooms/$roomId/meta/status': 'completed',
+      'rooms/$roomId/players/$forfeitingUid/isOnline': false,
+      'rooms/$roomId/players/$forfeitingUid/lastSeen': 0,
+      'rooms/$roomId/gameState/phase': 'gameOver',
+      'rooms/$roomId/gameState/donkeyPlayerUid': forfeitingUid,
+      'rooms/$roomId/gameState/donkeyPlayerName': forfeitingName,
+    };
+    await _db.ref().update(updates);
+  }
+
+  Future<void> updatePlayerPresence(String roomId, String uid) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.ref('rooms/$roomId/players/$uid').update({
+      'lastSeen': now,
+      'isOnline': true,
+    });
+  }
+
+  Future<Map<String, List<PlayingCard>>> getAllHands(String roomId) async {
+    final snap = await _db.ref('rooms/$roomId/hands').get();
+    if (!snap.exists || snap.value == null) return {};
+    final data = snap.value as Map<Object?, Object?>;
+    final result = <String, List<PlayingCard>>{};
+    for (final entry in data.entries) {
+      final uid = entry.key as String;
+      final val = entry.value as Map<Object?, Object?>?;
+      final cardsList = val?['cards'] as List<Object?>?;
+      if (cardsList != null) {
+        result[uid] = cardsList
+            .whereType<Map<Object?, Object?>>()
+            .map((c) {
+              final m = c.map((k, v) => MapEntry(k.toString(), v));
+              return PlayingCard.fromJson(m);
+            })
+            .toList();
+      }
+    }
+    return result;
   }
 }

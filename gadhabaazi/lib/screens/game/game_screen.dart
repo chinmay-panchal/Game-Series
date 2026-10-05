@@ -7,7 +7,6 @@ import '../punishment/punishment_screen.dart';
 import '../result/game_result_screen.dart';
 import 'widgets/game_table_view.dart';
 import '../../widgets/premium_toast.dart';
-import '../../core/constants/app_colors.dart';
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key});

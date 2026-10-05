@@ -1,0 +1,36 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "gadhabaazi",
+          "appId": "1:680291484173:android:9e41bec72bd24d1f44cb44",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "gadhabaazi",
+          "configurations": {
+            "android": "1:680291484173:android:9e41bec72bd24d1f44cb44",
+            "web": "1:680291484173:web:6276899440f17f5c44cb44"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

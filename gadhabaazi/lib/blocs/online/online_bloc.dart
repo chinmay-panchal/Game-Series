@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../engine/game_engine.dart';
@@ -6,15 +7,15 @@ import '../../engine/game_state.dart' as engine;
 import '../../engine/move_result.dart';
 import '../../engine/rules/move_rules.dart';
 import '../../engine/rules/punishment_rules.dart';
-import '../../engine/rules/loser_rules.dart';
 import '../../models/card_model.dart';
+import '../../models/player_model.dart';
 import '../../models/online_room_model.dart';
 import '../../models/round_model.dart';
-import '../../models/player_model.dart' as pm;
 import '../../models/enums/suit.dart';
 import '../../models/enums/rank.dart';
 import '../../models/enums/game_phase.dart';
 import '../../models/played_card.dart';
+import '../../engine/history/move_history.dart';
 import '../../services/room_repository.dart';
 import '../../services/audio_service.dart';
 import 'online_event.dart';
@@ -25,7 +26,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   final GameEngine _engine = GameEngine();
   final MoveRules _moveRules = MoveRules();
   final PunishmentRules _punishmentRules = PunishmentRules();
-  final LoserRules _loserRules = LoserRules();
   final AudioService _audio = AudioService();
 
   // Local runtime state
@@ -34,8 +34,9 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   String? _myName;
   bool _isHost = false;
   List<OnlinePlayerModel> _players = [];
+  List<OnlinePlayerModel> _gamePlayers = [];
 
-  // Public getters for guest move submission
+  // Public getters
   String? get currentRoomId => _room?.roomId;
   String? get currentRoomCode => _room?.roomCode;
   String? get myUid => _myUid;
@@ -54,11 +55,42 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   StreamSubscription? _gameStateSub;
   StreamSubscription? _pendingActionSub;
   StreamSubscription? _myHandSub;
+  StreamSubscription? _connectionSub;
+  Timer? _heartbeatTimer;
+  Timer? _presenceTimer;
+
+  // Track which player UIDs we have already redistributed (prevent duplicate redistribution)
+  final Set<String> _redistributedUids = {};
+  bool _hasLeft = false;
+
+  // Presence & activity tracking (clock-skew safe)
+  final Map<String, int> _playerLastHeardLocal = {};
+  final Map<String, int> _playerLastSeenRemote = {};
+
+  bool _isPlayerActive(OnlinePlayerModel p) {
+    if (p.uid == _myUid) return true;
+    if (!p.isOnline) return false;
+    final lastHeard = _playerLastHeardLocal[p.uid];
+    if (lastHeard == null) {
+      _playerLastHeardLocal[p.uid] = DateTime.now().millisecondsSinceEpoch;
+      return true;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return (now - lastHeard) < 7000;
+  }
+
+  bool get _isGameActive =>
+      _room?.status == 'in_progress' ||
+      state is OnlinePlayerTurn ||
+      state is OnlineWaitingForTurn ||
+      state is OnlineRoundCompleted ||
+      state is OnlinePunishmentNeeded ||
+      state is OnlineRedistributingCards ||
+      _hostGameState != null;
 
   OnlineBloc({required this.repository}) : super(OnlineInitial()) {
     on<CreateRoom>(_onCreateRoom);
     on<JoinRoom>(_onJoinRoom);
-    on<RejoinExistingRoom>(_onRejoinExistingRoom);
     on<HostStartGame>(_onHostStartGame);
     on<OnlinePlayCard>(_onPlayCard);
     on<OnlineGivePunishment>(_onGivePunishment);
@@ -66,15 +98,15 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     on<OnlineDistributeNewCards>(_onDistributeNewCards);
     on<OnlineLeaveRoom>(_onLeaveRoom);
     on<OnlineRestartRoom>(_onRestartRoom);
+    on<OnlineReassertPresence>(_onReassertPresence);
     on<RemoteGameStateUpdated>(_onRemoteGameStateUpdated);
     on<PendingActionReceived>(_onPendingActionReceived);
     on<PlayersUpdated>(_onPlayersUpdated);
     on<RoomStatusChanged>(_onRoomStatusChanged);
+    on<RoomMetaChanged>(_onRoomMetaChanged);
     on<MyHandUpdated>(_onMyHandUpdated);
-    on<DisconnectDataUpdated>(_onDisconnectDataUpdated);
+    on<OnlinePlayerLeft>(_onPlayerLeft);
   }
-
-  StreamSubscription? _disconnectSub;
 
   Future<void> _saveSession(
     String roomId,
@@ -88,18 +120,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       await prefs.setString('active_online_room_code', roomCode);
       await prefs.setString('active_online_player_name', name);
       await prefs.setString('active_online_player_uid', uid);
-      print('RJDBG SAVE: wrote roomId=$roomId uid=$uid name=$name');
-      final verify = prefs.getString('active_online_room_id');
-      print('RJDBG SAVE VERIFY: read-back roomId=$verify');
-    } catch (e, st) {
-      print('RJDBG SAVE ERROR: $e');
-      print('RJDBG SAVE STACK: $st');
-    }
+    } catch (_) {}
   }
 
   Future<void> _clearSession() async {
-    print('RJDBG CLEAR_SESSION CALLED');
-    print(StackTrace.current);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('active_online_room_id');
@@ -115,6 +139,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     CreateRoom event,
     Emitter<OnlineState> emit,
   ) async {
+    _hasLeft = false;
     emit(const OnlineLoading('Creating room...'));
     try {
       final room = await repository.createRoom(
@@ -134,6 +159,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   }
 
   Future<void> _onJoinRoom(JoinRoom event, Emitter<OnlineState> emit) async {
+    _hasLeft = false;
     emit(const OnlineLoading('Joining room...'));
     try {
       final room = await repository.joinRoom(
@@ -143,87 +169,63 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       _room = room;
       _myUid = repository.currentUid!;
       _myName = event.playerName;
-      _isHost = false;
+      _isHost = (_room!.hostId == _myUid);
       await _saveSession(room.roomId, room.roomCode, event.playerName, _myUid!);
       _subscribeToLobby(room.roomId);
-      emit(OnlineWaiting(room: room, players: [], isHost: false));
+      emit(OnlineWaiting(room: room, players: [], isHost: _isHost));
     } catch (e) {
       emit(OnlineError(e.toString()));
     }
   }
 
-  Future<void> _onRejoinExistingRoom(
-    RejoinExistingRoom event,
-    Emitter<OnlineState> emit,
-  ) async {
-    emit(const OnlineLoading('Rejoining room...'));
-    try {
-      final room = await repository.getActiveRoom(event.roomId);
-      print(
-        'RJDBG REJOIN: getActiveRoom -> room==null: ${room == null}, hostId=${room?.hostId}',
-      );
-      if (room == null) {
-        await _clearSession();
-        emit(const OnlineError('Room is no longer active.'));
-        return;
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _presenceTimer?.cancel();
+
+    // 1. Send heartbeat every 2 seconds to RTDB
+    _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
+      if (_room != null && _myUid != null) {
+        repository.updatePlayerPresence(_room!.roomId, _myUid!);
       }
-      _room = room;
-      _myUid = event.uid;
-      _myName = event.playerName;
-      _isHost = (_room!.hostId == _myUid);
-      print(
-        'RJDBG REJOIN: myUid=$_myUid roomHostId=${_room!.hostId} isHost=$_isHost',
-      );
+    });
 
-      await repository.rejoinRoom(event.roomId, _myUid!);
-      await _saveSession(room.roomId, room.roomCode, event.playerName, _myUid!);
-
-      _subscribeToLobby(room.roomId);
-      _subscribeToGame(room.roomId);
-
-      final gameStateData = await repository.getGameState(room.roomId);
-      print(
-        'RJDBG REJOIN: getGameState -> gameStateData==null: ${gameStateData == null}',
-      );
-      _myHand = await repository.getMyHand(room.roomId, _myUid!);
-      print('RJDBG REJOIN: myHand length=${_myHand.length}');
-
-      if (gameStateData != null) {
-        if (_isHost) {
-          print('RJDBG REJOIN: taking HOST reconstruction path');
-          // ... existing host reconstruction code unchanged ...
-        } else {
-          print('RJDBG REJOIN: taking GUEST path, calling _emitGuestGameState');
-          _emitGuestGameState(emit, gameStateData);
-          return;
+    // 2. Local check: if any player is inactive during active game, re-evaluate presence
+    _presenceTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
+      if (_room != null && _isGameActive && _players.isNotEmpty) {
+        final hasInactive = _players.any((p) => !_isPlayerActive(p));
+        if (hasInactive) {
+          add(PlayersUpdated(List.from(_players)));
         }
-      } else {
-        print(
-          'RJDBG REJOIN: gameStateData is null, falling through to OnlineWaiting',
-        );
       }
-
-      emit(OnlineWaiting(room: _room!, players: _players, isHost: _isHost));
-    } catch (e, st) {
-      print('RJDBG REJOIN ERROR: $e');
-      print('RJDBG REJOIN STACK: $st');
-    }
+    });
   }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
+  }
+
   // ─── Lobby Subscriptions ───────────────────────────────────────────────────
 
   void _subscribeToLobby(String roomId) {
     _playersSub?.cancel();
     _statusSub?.cancel();
-    _disconnectSub?.cancel();
+    _connectionSub?.cancel();
+
+    _startHeartbeat();
 
     _playersSub = repository.playersStream(roomId).listen((players) {
       add(PlayersUpdated(players));
     });
-    _statusSub = repository.roomStatusStream(roomId).listen((status) {
-      add(RoomStatusChanged(status));
+    _statusSub = repository.roomMetaStream(roomId).listen((meta) {
+      if (meta != null) add(RoomMetaChanged(meta));
     });
-    _disconnectSub = repository.disconnectDataStream(roomId).listen((data) {
-      add(DisconnectDataUpdated(data));
+    _connectionSub = repository.onConnectionChanged.listen((connected) {
+      if (connected && _room != null && _myUid != null) {
+        add(OnlineReassertPresence());
+      }
     });
   }
 
@@ -233,12 +235,15 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     if (_isHost) {
       // Host listens to pendingAction from guests
       _pendingActionSub?.cancel();
-      print(
-        'RJDBG SUBSCRIBE: host subscribing to pendingActionStream for roomId=$roomId',
-      );
       _pendingActionSub = repository.pendingActionStream(roomId).listen((data) {
-        print('RJDBG PENDING_STREAM: data received=$data');
         if (data != null) add(PendingActionReceived(data));
+      });
+      // Host ALSO listens to gameStateStream specifically for gameOver/forfeit events!
+      _gameStateSub?.cancel();
+      _gameStateSub = repository.gameStateStream(roomId).listen((data) {
+        if (data != null && data['phase'] == 'gameOver') {
+          add(RemoteGameStateUpdated(data));
+        }
       });
     } else {
       // Guest listens to gameState and their own hand
@@ -252,28 +257,47 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       });
     }
   }
+
+  Future<void> _onReassertPresence(
+    OnlineReassertPresence event,
+    Emitter<OnlineState> emit,
+  ) async {
+    if (_room == null || _myUid == null) return;
+    try {
+      await repository.rejoinRoom(_room!.roomId, _myUid!, _myName);
+      if (_room!.hostId == _myUid && _room!.status == 'waiting') {
+        _isHost = true;
+      }
+    } catch (e) {
+      debugPrint('Failed to reassert presence: $e');
+    }
+  }
+
   // ─── Host: Start Game ──────────────────────────────────────────────────────
 
   Future<void> _onHostStartGame(
     HostStartGame event,
     Emitter<OnlineState> emit,
   ) async {
+    // Only the host can start the game!
     if (!_isHost || _room == null) return;
+    final activeOnlinePlayers = _players.where((p) => p.isOnline).toList();
+    if (activeOnlinePlayers.length < 2) {
+      emit(const OnlineError('Need at least 2 players to start.'));
+      return;
+    }
     emit(const OnlineLoading('Starting game...'));
 
     try {
-      // Build player names list in join order
-      final playerNames = _players.map((p) => p.name).toList();
-      final playerUids = _players.map((p) => p.uid).toList();
+      final playerNames = activeOnlinePlayers.map((p) => p.name).toList();
+      final playerUids = activeOnlinePlayers.map((p) => p.uid).toList();
+      _gamePlayers = List.from(activeOnlinePlayers);
 
-      // Run engine to create initial game state
       final result = _engine.startGame(playerNames);
       _hostGameState = result.gameState.copyWith(phase: GamePhase.playerTurn);
 
-      // Build serializable gameState (no hands — those go in /hands/)
       final gsMap = _buildPublicGameState(_hostGameState!, playerUids);
 
-      // Build hands per player uid
       final handsPerPlayer = <String, List<Map<String, dynamic>>>{};
       for (int i = 0; i < _hostGameState!.players.length; i++) {
         final uid = playerUids[i];
@@ -288,6 +312,8 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         handsPerPlayer: handsPerPlayer,
       );
 
+      _room = _room!.copyWith(status: 'in_progress');
+      _redistributedUids.clear();
       _subscribeToGame(_room!.roomId);
       _emitHostGameState(emit);
     } catch (e) {
@@ -385,12 +411,45 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
   }
 
+  // ─── Host: Player Left — redistribute cards ────────────────────────────────
+
+  Future<void> _onPlayerLeft(
+    OnlinePlayerLeft event,
+    Emitter<OnlineState> emit,
+  ) async {
+    if (!_isHost || _hostGameState == null || _room == null) return;
+
+    // Prevent duplicate redistribution for the same player
+    if (_redistributedUids.contains(event.playerUid)) return;
+    _redistributedUids.add(event.playerUid);
+
+    // Find engine player id for this uid
+    final playerUids = _gamePlayers.isNotEmpty
+        ? _gamePlayers.map((p) => p.uid).toList()
+        : _players.map((p) => p.uid).toList();
+    final playerIdx = playerUids.indexOf(event.playerUid);
+    if (playerIdx < 0 || playerIdx >= _hostGameState!.players.length) return;
+
+    final enginePlayerId = _hostGameState!.players[playerIdx].id;
+
+    // Remove player from RTDB
+    await repository.removePlayer(_room!.roomId, event.playerUid);
+
+    // Redistribute cards in engine
+    final result = _engine.redistributePlayerCards(_hostGameState!, enginePlayerId);
+
+    _hostGameState = result.gameState;
+    await _syncStateToRtdb();
+    _emitHostGameState(emit);
+  }
+
   // ─── Guest: Remote State Updates ──────────────────────────────────────────
 
   Future<void> _onRemoteGameStateUpdated(
     RemoteGameStateUpdated event,
     Emitter<OnlineState> emit,
   ) async {
+    if (_hasLeft) return;
     _lastReceivedGameState = event.data;
     _emitGuestGameState(emit, event.data);
   }
@@ -399,8 +458,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     MyHandUpdated event,
     Emitter<OnlineState> emit,
   ) async {
-    // Re-emit state when Guest receives their hand from RTDB
-    // This fixes the bug where guest gets 'PlayerTurn' BEFORE their hand stream arrives
     if (!_isHost && _lastReceivedGameState != null) {
       if (state is OnlineWaitingForTurn || state is OnlinePlayerTurn) {
         _emitGuestGameState(emit, _lastReceivedGameState!);
@@ -410,103 +467,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   // ─── Host: Process Guest's Pending Action ─────────────────────────────────
 
-  Future<void> _becomeHostAndSync(Emitter<OnlineState> emit) async {
-    if (_room == null) return;
-    print(
-      'RJDBG MIGRATION: becoming host, reconstructing state for roomId=${_room!.roomId}',
-    );
-
-    _subscribeToGame(_room!.roomId); // switches pendingAction listener on
-
-    final gameStateData = await repository.getGameState(_room!.roomId);
-    if (gameStateData == null) {
-      print(
-        'RJDBG MIGRATION: no gameState in RTDB yet, nothing to reconstruct',
-      );
-      return;
-    }
-
-    final playerOrder = (gameStateData['playerOrder'] as List<Object?>? ?? [])
-        .map((e) => e.toString())
-        .toList();
-    final activeIdx = gameStateData['activePlayerIndex'] as int? ?? 0;
-    final phaseName = gameStateData['phase'] as String? ?? 'playerTurn';
-    final phase = GamePhase.values.firstWhere(
-      (p) => p.name == phaseName,
-      orElse: () => GamePhase.playerTurn,
-    );
-
-    List<pm.Player> enginePlayers = [];
-    for (int i = 0; i < playerOrder.length; i++) {
-      final uid = playerOrder[i];
-      final pHand = await repository.getMyHand(_room!.roomId, uid);
-      final pName = _players
-          .firstWhere(
-            (p) => p.uid == uid,
-            orElse: () => OnlinePlayerModel(
-              uid: uid,
-              name: 'Player ${i + 1}',
-              isOnline: true,
-              joinedAt: 0,
-            ),
-          )
-          .name;
-      enginePlayers.add(pm.Player(id: 'p$i', name: pName, hand: pHand));
-    }
-
-    if (enginePlayers.isEmpty) return;
-
-    RoundModel? currentRound;
-    final roundData = gameStateData['currentRound'];
-    if (roundData is Map<Object?, Object?>) {
-      currentRound = _parseRound(roundData);
-    }
-
-    List<RoundModel> completedRounds = [];
-    final completedData = gameStateData['completedRounds'];
-    if (completedData is List<Object?>) {
-      for (final r in completedData) {
-        if (r is Map<Object?, Object?>) completedRounds.add(_parseRound(r));
-      }
-    }
-
-    final donkeyUid = gameStateData['donkeyPlayerUid'] as String?;
-    final donkeyId = donkeyUid != null && playerOrder.contains(donkeyUid)
-        ? 'p${playerOrder.indexOf(donkeyUid)}'
-        : null;
-
-    final finishedUidsRaw =
-        gameStateData['finishedPlayerUids'] as List<Object?>? ?? [];
-    final finishedPlayerIds = finishedUidsRaw.map((uid) {
-      final strUid = uid.toString();
-      final idx = playerOrder.indexOf(strUid);
-      return idx >= 0 ? 'p$idx' : strUid;
-    }).toList();
-
-    _hostGameState = engine.GameState(
-      players: enginePlayers,
-      activePlayerIndex: activeIdx,
-      phase: phase,
-      currentRound: currentRound,
-      completedRounds: completedRounds,
-      donkeyPlayerId: donkeyId,
-      finishedPlayerIds: finishedPlayerIds,
-      unendingLoopDetected:
-          gameStateData['unendingLoopDetected'] as bool? ?? false,
-    );
-    print(
-      'RJDBG MIGRATION: hostGameState reconstructed successfully, phase=$phase',
-    );
-    _emitHostGameState(emit);
-  }
-
   Future<void> _onPendingActionReceived(
     PendingActionReceived event,
     Emitter<OnlineState> emit,
   ) async {
-    print(
-      'RJDBG PENDING_ACTION: received, isHost=$_isHost hostGameState==null: ${_hostGameState == null}, data=${event.data}',
-    );
     if (!_isHost || _hostGameState == null) return;
 
     final data = event.data;
@@ -543,7 +507,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       await repository.clearPendingAction(_room!.roomId);
       await _syncStateToRtdb();
     } else {
-      // Clear the bad action so guest can try again
       await repository.clearPendingAction(_room!.roomId);
     }
     _emitHostGameState(emit);
@@ -555,46 +518,88 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     PlayersUpdated event,
     Emitter<OnlineState> emit,
   ) async {
+    if (_hasLeft) return;
     _players = event.players;
 
-    // Handle host migration: if current host is offline, elect next
-    if (_room != null) {
-      final hostPlayer = _players.firstWhere(
-        (p) => p.uid == _room!.hostId,
-        orElse: () =>
-            OnlinePlayerModel(uid: '', name: '', isOnline: false, joinedAt: 0),
-      );
-      if (!hostPlayer.isOnline && _players.isNotEmpty) {
-        final onlinePlayers = _players.where((p) => p.isOnline).toList();
-        if (onlinePlayers.isNotEmpty) {
-          final newHost = onlinePlayers.first;
-          if (newHost.uid == _myUid) {
-            // I'm the new host
-            _isHost = true;
-            repository.claimHost(_room!.roomId, _myUid!);
-            _room = OnlineRoomModel(
-              roomId: _room!.roomId,
-              roomCode: _room!.roomCode,
-              hostId: _myUid!,
-              status: _room!.status,
-              maxPlayers: _room!.maxPlayers,
-              createdAt: _room!.createdAt,
-            );
-            await _becomeHostAndSync(emit); // ← ADD THIS LINE
-          }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final p in _players) {
+      if (p.uid == _myUid) {
+        _playerLastHeardLocal[p.uid] = now;
+      } else if (p.isOnline) {
+        final lastRemote = _playerLastSeenRemote[p.uid];
+        if (lastRemote == null || lastRemote != p.lastSeen) {
+          _playerLastSeenRemote[p.uid] = p.lastSeen;
+          _playerLastHeardLocal[p.uid] = now;
         }
       }
     }
 
-    // Handle disconnected player during game: set disconnect timer in RTDB
-    if (_room != null) {
-      final offlinePlayers = _players.where((p) => !p.isOnline).toList();
-      if (offlinePlayers.isNotEmpty) {
-        for (final p in offlinePlayers) {
-          repository.setDisconnectTimer(_room!.roomId, p.uid, p.name);
+    if (_gamePlayers.isEmpty && _players.isNotEmpty) {
+      _gamePlayers = List.from(_players);
+    }
+
+    // ─── Active Gameplay Handling ───────────────────────────────────────────
+    if (_room != null && (_room!.status == 'in_progress' || _isGameActive)) {
+      final activePlayers = _players.where((p) => _isPlayerActive(p)).toList();
+      final inactivePlayers = _players.where((p) => !_isPlayerActive(p)).toList();
+      final missingPlayers = _gamePlayers
+          .where((gp) => !_players.any((p) => p.uid == gp.uid))
+          .toList();
+
+      // Simple rule: if ANY player left or went offline during active game,
+      // end the game immediately! The departing player is the loser (donkey).
+      if (inactivePlayers.isNotEmpty || missingPlayers.isNotEmpty) {
+        final donkeyPlayer = inactivePlayers.isNotEmpty
+            ? inactivePlayers.first
+            : missingPlayers.first;
+
+        final donkeyName = donkeyPlayer.name;
+        final winnerNames = activePlayers
+            .where((p) => p.uid != donkeyPlayer.uid)
+            .map((p) => p.name)
+            .toList();
+        if (winnerNames.isEmpty && _myName != null) {
+          winnerNames.add(_myName!);
         }
-      } else {
-        repository.clearDisconnectData(_room!.roomId);
+
+        final finishingOrder = [...winnerNames, donkeyName];
+
+        await repository.forfeitRoom(_room!.roomId, donkeyPlayer.uid, donkeyName);
+        await _clearSession();
+
+        emit(OnlineGameFinished(
+          donkeyName: donkeyName,
+          finishingOrder: finishingOrder,
+        ));
+        return;
+      }
+    }
+
+    // ─── Lobby Handling (Waiting Room) ───────────────────────────────────────
+    if (_room != null && _room!.status == 'waiting') {
+      final activePlayers = _players.where((p) => p.isOnline).toList();
+
+      if (activePlayers.isEmpty) {
+        // Everyone left the lobby -> delete the room
+        await repository.deleteRoom(_room!.roomId, _room!.roomCode);
+        return;
+      }
+
+      final hostIsOnline = activePlayers.any((p) => p.uid == _room!.hostId);
+      if (!hostIsOnline) {
+        // Host left or is offline: randomly pick from existing active players
+        final newHost = (List<OnlinePlayerModel>.from(activePlayers)..shuffle()).first;
+        await repository.claimHost(_room!.roomId, newHost.uid);
+        _room = _room!.copyWith(hostId: newHost.uid);
+        _isHost = (newHost.uid == _myUid);
+      }
+
+      // If we are host, automatically remove any offline players from RTDB to free up slots
+      if (_isHost) {
+        final offlinePlayers = _players.where((p) => !p.isOnline).toList();
+        for (final p in offlinePlayers) {
+          await repository.removePlayer(_room!.roomId, p.uid);
+        }
       }
     }
 
@@ -603,122 +608,173 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
   }
 
-  Timer? _autoWinCheckTimer;
+  Future<void> _reconstructHostGameStateFromRtdb() async {
+    if (_room == null) return;
+    try {
+      final rtdbState = await repository.getGameState(_room!.roomId);
+      final hands = await repository.getAllHands(_room!.roomId);
+      if (rtdbState == null) return;
 
-  void _onDisconnectDataUpdated(
-    DisconnectDataUpdated event,
-    Emitter<OnlineState> emit,
-  ) {
-    _autoWinCheckTimer?.cancel();
-    final data = event.data;
-    if (data == null || _room == null) return;
+      final playerOrder = (rtdbState['playerOrder'] as List<Object?>? ?? [])
+          .map((e) => e.toString())
+          .toList();
 
-    final expiresAt = data['expiresAt'] as int? ?? 0;
-    final disconnectedUid = data['disconnectedUid'] as String? ?? '';
-    final disconnectedName = data['disconnectedName'] as String? ?? 'Player';
+      if (playerOrder.isNotEmpty) {
+        _gamePlayers = playerOrder.map((uid) {
+          return _gamePlayers.firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => _players.firstWhere(
+              (p) => p.uid == uid,
+              orElse: () => OnlinePlayerModel(
+                uid: uid,
+                name: 'Player',
+                isOnline: true,
+                joinedAt: 0,
+              ),
+            ),
+          );
+        }).toList();
+      }
 
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final remainingMs = expiresAt - now;
+      List<Player> enginePlayers = [];
+      for (int i = 0; i < playerOrder.length; i++) {
+        final uid = playerOrder[i];
+        final name = _gamePlayers.firstWhere(
+          (p) => p.uid == uid,
+          orElse: () => _players.firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => OnlinePlayerModel(
+              uid: uid,
+              name: 'Player $i',
+              isOnline: true,
+              joinedAt: 0,
+            ),
+          ),
+        ).name;
+        final playerHand = hands[uid] ?? [];
+        enginePlayers.add(Player(id: 'p$i', name: name, hand: playerHand));
+      }
 
-    if (remainingMs <= 0) {
-      _triggerAutoPlay(disconnectedUid, disconnectedName, emit);
-    } else {
-      // Schedule timer check when 30 seconds timer expires
-      _autoWinCheckTimer = Timer(Duration(milliseconds: remainingMs), () {
-        add(DisconnectDataUpdated(data));
-      });
-    }
+      RoundModel? currentRound;
+      final roundData = rtdbState['currentRound'];
+      if (roundData is Map<Object?, Object?>) {
+        currentRound = _parseRound(roundData);
+      }
+
+      List<RoundModel> completedRounds = [];
+      final completedData = rtdbState['completedRounds'];
+      if (completedData is List<Object?>) {
+        for (final r in completedData) {
+          if (r is Map<Object?, Object?>) {
+            completedRounds.add(_parseRound(r));
+          }
+        }
+      }
+
+      final activeIdx = rtdbState['activePlayerIndex'] as int? ?? 0;
+
+      _hostGameState = engine.GameState(
+        players: enginePlayers,
+        activePlayerIndex: activeIdx,
+        currentRound: currentRound,
+        completedRounds: completedRounds,
+        phase: GamePhase.playerTurn,
+        history: MoveHistory(),
+      );
+    } catch (_) {}
   }
 
   Future<void> _onRestartRoom(
     OnlineRestartRoom event,
     Emitter<OnlineState> emit,
   ) async {
-    if (_room == null) return;
+    if (_room == null || _myUid == null) return;
     try {
       emit(const OnlineLoading('Restarting game...'));
-      await repository.restartRoom(_room!.roomId);
+      final currentRoom = await repository.getActiveRoom(_room!.roomId);
+      String hostId;
+      if (currentRoom != null && currentRoom.status == 'waiting') {
+        // Room was already restarted: rejoin as guest (pass name so it persists)
+        await repository.rejoinRoom(_room!.roomId, _myUid!, _myName);
+        hostId = currentRoom.hostId;
+      } else {
+        // First one to return to lobby! Make this player the host!
+        await repository.restartRoom(_room!.roomId, _myUid!, _myName);
+        hostId = _myUid!;
+      }
+      _isHost = (hostId == _myUid);
       _hostGameState = null;
       _lastReceivedGameState = null;
+      _redistributedUids.clear();
+      _subscribeToLobby(_room!.roomId);
+      await _saveSession(_room!.roomId, _room!.roomCode, _myName ?? 'Player', _myUid!);
+
+      _room = OnlineRoomModel(
+        roomId: _room!.roomId,
+        roomCode: _room!.roomCode,
+        hostId: hostId,
+        status: 'waiting',
+        maxPlayers: _room!.maxPlayers,
+        createdAt: _room!.createdAt,
+      );
+
+      _players = [
+        OnlinePlayerModel(
+          uid: _myUid!,
+          name: _myName ?? 'Player',
+          isOnline: true,
+          joinedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      ];
+
       emit(OnlineWaiting(room: _room!, players: _players, isHost: _isHost));
     } catch (e) {
       emit(OnlineError(e.toString()));
     }
   }
 
-  void _triggerAutoPlay(
-    String disconnectedUid,
-    String disconnectedName,
-    Emitter<OnlineState> emit,
-  ) {
-    if (_room == null) return;
-
-    final remainingPlayers = _players
-        .where((p) => p.uid != disconnectedUid && p.isOnline)
-        .toList();
-
-    if (remainingPlayers.isEmpty) {
-      // Nobody left — delete room entirely
-      repository.deleteRoom(_room!.roomId, _room!.roomCode);
-      _clearSession();
-      emit(OnlineInitial());
-      return;
-    }
-
-    // ── Guest-side: if only 1 player remains (me) and I'm the guest, end the game immediately ──
-    if (!_isHost) {
-      if (remainingPlayers.length == 1 &&
-          remainingPlayers.first.uid == _myUid) {
-        // I'm the only player left — declare myself winner
-        final myName = _myName ?? 'Player';
-        repository.clearDisconnectData(_room!.roomId);
-        repository.completeRoom(_room!.roomId);
-        emit(
-          OnlineGameFinished(
-            donkeyName: disconnectedName,
-            finishingOrder: [myName, disconnectedName],
-          ),
-        );
-      }
-      // Guest can't process host-side redistribution — wait for host to sync via RTDB
-      return;
-    }
-
-    // ── Host-side: redistribute cards ──
-    if (_hostGameState == null) return;
-
-    final playerUids = _players.map((p) => p.uid).toList();
-    final disconnectedIdx = playerUids.indexOf(disconnectedUid);
-    if (disconnectedIdx < 0 ||
-        disconnectedIdx >= _hostGameState!.players.length)
-      return;
-
-    final disconnectedPlayer = _hostGameState!.players[disconnectedIdx];
-
-    // Redistribute disconnected player's cards among remaining active players
-    final result = _engine.redistributePlayerCards(
-      _hostGameState!,
-      disconnectedPlayer.id,
-    );
-    _hostGameState = result.gameState;
-
-    repository.clearDisconnectData(_room!.roomId);
-    _syncStateToRtdb();
-
-    emit(OnlineRedistributingCards(disconnectedPlayerName: disconnectedName));
-    _emitHostGameState(emit);
-  }
-
   void _onRoomStatusChanged(
     RoomStatusChanged event,
     Emitter<OnlineState> emit,
   ) {
+    if (_hasLeft) return;
+    if (_room != null) {
+      _room = _room!.copyWith(status: event.status);
+    }
     if (event.status == 'in_progress' && !_isHost) {
-      // Game started — subscribe to game streams as guest
+      if (_gamePlayers.isEmpty && _players.isNotEmpty) {
+        _gamePlayers = List.from(_players);
+      }
       _subscribeToGame(_room!.roomId);
     }
-    if (event.status == 'completed') {
-      // Already handled through game state
+  }
+
+  void _onRoomMetaChanged(
+    RoomMetaChanged event,
+    Emitter<OnlineState> emit,
+  ) {
+    if (_hasLeft) return;
+    final meta = event.meta;
+    final status = meta['status'] as String? ?? 'waiting';
+    final hostId = meta['hostId'] as String?;
+
+    if (_room != null) {
+      _room = _room!.copyWith(
+        status: status,
+        hostId: hostId ?? _room!.hostId,
+      );
+      _isHost = (_room!.hostId == _myUid);
+    }
+
+    if (status == 'in_progress' && !_isHost) {
+      if (_gamePlayers.isEmpty && _players.isNotEmpty) {
+        _gamePlayers = List.from(_players);
+      }
+      _subscribeToGame(_room!.roomId);
+    } else if (status == 'waiting') {
+      if (state is OnlineWaiting) {
+        emit(OnlineWaiting(room: _room!, players: _players, isHost: _isHost));
+      }
     }
   }
 
@@ -726,7 +782,9 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   Future<void> _syncStateToRtdb() async {
     if (!_isHost || _hostGameState == null || _room == null) return;
-    final playerUids = _players.map((p) => p.uid).toList();
+    final playerUids = _gamePlayers.isNotEmpty
+        ? _gamePlayers.map((p) => p.uid).toList()
+        : _players.map((p) => p.uid).toList();
     final gsMap = _buildPublicGameState(_hostGameState!, playerUids);
     final handsPerPlayer = <String, List<Map<String, dynamic>>>{};
     for (
@@ -750,9 +808,10 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final gs = _hostGameState!;
     final activeIdx = gs.activePlayerIndex;
     final activeEnginePlayer = gs.players[activeIdx];
-    final playerUids = _players.map((p) => p.uid).toList();
+    final playerUids = _gamePlayers.isNotEmpty
+        ? _gamePlayers.map((p) => p.uid).toList()
+        : _players.map((p) => p.uid).toList();
 
-    // Find my uid's position — host is always index 0 in _players
     final myIdx = playerUids.indexOf(_myUid!);
     final myEnginePlayer = myIdx >= 0 && myIdx < gs.players.length
         ? gs.players[myIdx]
@@ -762,17 +821,27 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     final Map<String, String> pNames = {};
     for (int i = 0; i < playerUids.length; i++) {
-      pNames['p$i'] = _players
-          .firstWhere(
-            (p) => p.uid == playerUids[i],
-            orElse: () => OnlinePlayerModel(
-              uid: playerUids[i],
-              name: 'Player $i',
-              isOnline: true,
-              joinedAt: 0,
-            ),
-          )
-          .name;
+      pNames['p$i'] = _gamePlayers.isNotEmpty
+          ? _gamePlayers.firstWhere(
+              (p) => p.uid == playerUids[i],
+              orElse: () => OnlinePlayerModel(
+                uid: playerUids[i],
+                name: 'Player $i',
+                isOnline: true,
+                joinedAt: 0,
+              ),
+            ).name
+          : _players
+              .firstWhere(
+                (p) => p.uid == playerUids[i],
+                orElse: () => OnlinePlayerModel(
+                  uid: playerUids[i],
+                  name: 'Player $i',
+                  isOnline: true,
+                  joinedAt: 0,
+                ),
+              )
+              .name;
     }
 
     switch (gs.phase) {
@@ -816,7 +885,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         final completedRound = gs.completedRounds.last;
         final leaderId = _moveRules.roundLeaderId(completedRound);
         final leaderName = gs.players.firstWhere((p) => p.id == leaderId).name;
-        // If punishment card exists, find who received it
         String? punishReceiverName;
         String? punishReceiverUid;
         if (completedRound.punishmentCard != null &&
@@ -830,7 +898,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
             punishReceiverName = gs.players
                 .firstWhere((p) => p.id == targetId)
                 .name;
-            // Play sound if host is the one receiving punishment
             if (punishReceiverUid == _myUid) {
               _audio.playPunishSound();
             }
@@ -849,14 +916,20 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         );
         break;
       case GamePhase.gameOver:
-        final donkeyId = gs.donkeyPlayerId!;
-        final donkeyName = gs.players.firstWhere((p) => p.id == donkeyId).name;
-        final finishing =
-            gs.finishedPlayerIds
-                .map((id) => gs.players.firstWhere((p) => p.id == id).name)
-                .toList()
-              ..add(donkeyName);
+        final donkeyId = gs.donkeyPlayerId ?? '';
+        final donkeyPlayer = gs.players.firstWhere(
+          (p) => p.id == donkeyId,
+          orElse: () => gs.players.last,
+        );
+        final donkeyName = donkeyPlayer.name;
+        final finishing = gs.finishedPlayerIds
+            .map((id) => gs.players.firstWhere((p) => p.id == id, orElse: () => Player(id: id, name: id, hand: [])).name)
+            .toList();
+        if (!finishing.contains(donkeyName)) {
+          finishing.add(donkeyName);
+        }
         repository.completeRoom(_room!.roomId);
+        _clearSession();
         emit(
           OnlineGameFinished(donkeyName: donkeyName, finishingOrder: finishing),
         );
@@ -892,7 +965,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     );
     final isMyTurn = activeUid == _myUid;
 
-    // Deserialize round
     RoundModel? currentRound;
     final roundData = data['currentRound'];
     if (roundData is Map<Object?, Object?>) {
@@ -912,17 +984,18 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final Map<String, String> pNames = {};
     for (int i = 0; i < playerOrder.length; i++) {
       final uid = playerOrder[i];
-      pNames['p$i'] = _players
-          .firstWhere(
-            (p) => p.uid == uid,
-            orElse: () => OnlinePlayerModel(
-              uid: uid,
-              name: 'Player',
-              isOnline: true,
-              joinedAt: 0,
-            ),
-          )
-          .name;
+      pNames['p$i'] = _gamePlayers.firstWhere(
+        (p) => p.uid == uid,
+        orElse: () => _players.firstWhere(
+          (p) => p.uid == uid,
+          orElse: () => OnlinePlayerModel(
+            uid: uid,
+            name: 'Player',
+            isOnline: true,
+            joinedAt: 0,
+          ),
+        ),
+      ).name;
     }
 
     final myIdx = playerOrder.indexOf(_myUid!);
@@ -1021,11 +1094,9 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
                 leadPlayerId: '',
                 playedCards: [],
               );
-        // Punishment info — read directly from stored round data (no local computation needed)
         String? punishReceiverName;
         String? punishReceiverUid;
         if (lastRound.punishmentCard != null) {
-          // Host stored punishmentReceiverUid directly in the completed round map
           final completedRaw = data['completedRounds'];
           if (completedRaw is List<Object?> && completedRaw.isNotEmpty) {
             final lastRaw = completedRaw.last;
@@ -1046,7 +1117,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
                 )
                 .name;
           }
-          // Play punishment sound if I am the one being punished
           if (punishReceiverUid == _myUid) {
             _audio.playPunishSound();
           }
@@ -1064,33 +1134,52 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         );
         break;
       case 'gameOver':
+        if (_hasLeft) return;
         final donkeyUid = data['donkeyPlayerUid'] as String? ?? '';
-        final donkeyPlayer = _players.firstWhere(
-          (p) => p.uid == donkeyUid,
-          orElse: () => OnlinePlayerModel(
-            uid: '',
-            name: 'Unknown',
-            isOnline: true,
-            joinedAt: 0,
-          ),
-        );
+        final donkeyNameFromData = data['donkeyPlayerName'] as String?;
+        final donkeyPlayer = (donkeyNameFromData != null && donkeyNameFromData.isNotEmpty)
+            ? OnlinePlayerModel(uid: donkeyUid, name: donkeyNameFromData, isOnline: false, joinedAt: 0)
+            : _gamePlayers.firstWhere(
+                (p) => p.uid == donkeyUid,
+                orElse: () => _players.firstWhere(
+                  (p) => p.uid == donkeyUid,
+                  orElse: () => OnlinePlayerModel(
+                    uid: donkeyUid,
+                    name: 'Player',
+                    isOnline: false,
+                    joinedAt: 0,
+                  ),
+                ),
+              );
         final finishedUids =
             (data['finishedPlayerUids'] as List<Object?>? ?? [])
                 .map((e) => e.toString())
                 .toList();
         final finishing = finishedUids.map((uid) {
-          return _players
-              .firstWhere(
-                (p) => p.uid == uid,
-                orElse: () => OnlinePlayerModel(
-                  uid: uid,
-                  name: uid,
-                  isOnline: true,
-                  joinedAt: 0,
-                ),
-              )
-              .name;
-        }).toList()..add(donkeyPlayer.name);
+          return _gamePlayers.firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => _players.firstWhere(
+              (p) => p.uid == uid,
+              orElse: () => OnlinePlayerModel(
+                uid: uid,
+                name: uid,
+                isOnline: true,
+                joinedAt: 0,
+              ),
+            ),
+          ).name;
+        }).toList();
+        if (finishing.isEmpty && _myName != null) {
+          finishing.add(_myName!);
+        }
+        if (!finishing.contains(donkeyPlayer.name)) {
+          finishing.add(donkeyPlayer.name);
+        }
+        if (_room != null) {
+          repository.completeRoom(_room!.roomId);
+        }
+        _clearSession();
+        _cancelAllSubscriptions();
         emit(
           OnlineGameFinished(
             donkeyName: donkeyPlayer.name,
@@ -1120,7 +1209,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         .map((r) => _roundToMap(r, playerUids))
         .toList();
 
-    // Determine winner uid for last round
     String lastRoundWinnerUid = '';
     if (gs.completedRounds.isNotEmpty) {
       final leaderId = _moveRules.roundLeaderId(gs.completedRounds.last);
@@ -1131,10 +1219,12 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     }
 
     String? donkeyUid;
+    String? donkeyName;
     if (gs.donkeyPlayerId != null) {
       final donkeyIdx = gs.players.indexWhere((p) => p.id == gs.donkeyPlayerId);
       if (donkeyIdx >= 0 && donkeyIdx < playerUids.length) {
         donkeyUid = playerUids[donkeyIdx];
+        donkeyName = gs.players[donkeyIdx].name;
       }
     }
 
@@ -1151,13 +1241,13 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       'completedRounds': completedMaps,
       'lastRoundWinnerId': lastRoundWinnerUid,
       'donkeyPlayerUid': donkeyUid,
+      'donkeyPlayerName': donkeyName,
       'finishedPlayerUids': finishedUids,
       'unendingLoopDetected': gs.unendingLoopDetected,
     };
   }
 
   Map<String, dynamic> _roundToMap(RoundModel r, List<String> playerUids) {
-    // Also store punishmentReceiverUid directly so guests can check cheaply
     String? punishmentReceiverUid;
     if (r.punishmentCard != null && r.playedCards.isNotEmpty) {
       final targetId = _punishmentRules.targetOfPunishment(r.playedCards);
@@ -1174,7 +1264,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       'playedCards': r.playedCards
           .map((pc) => {'playerId': pc.playerId, 'card': pc.card.toJson()})
           .toList(),
-      // Punishment fields — only set when punishment occurred
       if (r.punishmentCard != null)
         'punishmentCard': r.punishmentCard!.toJson(),
       if (punishmentReceiverUid != null)
@@ -1199,7 +1288,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         card: PlayingCard.fromJson(m),
       );
     }).toList();
-    // Parse optional punishment card
     PlayingCard? punishmentCard;
     final punishCardRaw = data['punishmentCard'];
     if (punishCardRaw is Map<Object?, Object?>) {
@@ -1220,28 +1308,45 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     OnlineLeaveRoom event,
     Emitter<OnlineState> emit,
   ) async {
-    if (_room != null && _myUid != null) {
-      await repository.leaveRoom(_room!.roomId, _myUid!);
-    }
-    await _clearSession();
+    _hasLeft = true;
     _cancelAllSubscriptions();
+    final roomId = _room?.roomId;
+    final uid = _myUid;
+    final name = _myName ?? 'Player';
+    final wasGameActive = _isGameActive;
+
     _room = null;
     _myUid = null;
     _myName = null;
     _isHost = false;
     _hostGameState = null;
     _players = [];
+    _gamePlayers = [];
+    _redistributedUids.clear();
+    await _clearSession();
     emit(OnlineInitial());
+
+    if (roomId != null && uid != null) {
+      if (wasGameActive) {
+        // Simple rule: if anybody leaves during active game, end the game immediately;
+        // the one who exits is the loser (donkey)!
+        await repository.forfeitRoom(roomId, uid, name);
+      } else {
+        await repository.leaveRoom(roomId, uid);
+      }
+    }
   }
 
   void _cancelAllSubscriptions() {
+    _stopHeartbeat();
+    _playerLastHeardLocal.clear();
+    _playerLastSeenRemote.clear();
     _playersSub?.cancel();
     _statusSub?.cancel();
     _gameStateSub?.cancel();
     _pendingActionSub?.cancel();
     _myHandSub?.cancel();
-    _disconnectSub?.cancel();
-    _autoWinCheckTimer?.cancel();
+    _connectionSub?.cancel();
   }
 
   @override

@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../blocs/online/online_bloc.dart';
 import '../../models/card_model.dart';
 import '../../blocs/online/online_event.dart';
 import '../../blocs/online/online_state.dart';
-import '../../core/constants/app_colors.dart';
 
 import '../../widgets/animated_background.dart';
 import '../../widgets/premium_toast.dart';
@@ -30,11 +30,11 @@ class OnlineGameScreen extends StatefulWidget {
   State<OnlineGameScreen> createState() => _OnlineGameScreenState();
 }
 
-class _OnlineGameScreenState extends State<OnlineGameScreen> {
+class _OnlineGameScreenState extends State<OnlineGameScreen>
+    with WidgetsBindingObserver {
   PlayingCard? _selectedCard;
   String? _lastActivePlayer;
-  int _hostDisconnectSeconds = 0;
-  Timer? _hostDisconnectTimer;
+  String? _displayRoomCode;
   Timer? _roundCompleteTimer;
   bool _autoRedistributeDispatched = false;
   bool _isDealing = true;
@@ -48,10 +48,13 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
   PlayingCard? _remoteDropCard;
   bool _remoteDropIsPunishment = false;
   bool _showRemoteDrop = false;
+  bool _hasNavigatedToResult = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadRoomCode();
     // Skip dealing animation on rejoin or if game already in progress
     if (widget.isRejoin) {
       _isDealing = false;
@@ -72,30 +75,38 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
     if (alreadyInProgress) _isDealing = false;
   }
 
+  Future<void> _loadRoomCode() async {
+    final blocCode = context.read<OnlineBloc>().currentRoomCode;
+    if (blocCode != null && blocCode.isNotEmpty) {
+      if (mounted) setState(() => _displayRoomCode = blocCode);
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final savedCode = prefs.getString('active_online_room_code');
+    if (mounted && savedCode != null) {
+      setState(() => _displayRoomCode = savedCode);
+    }
+  }
+
   @override
   void dispose() {
-    _hostDisconnectTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _roundCompleteTimer?.cancel();
     super.dispose();
   }
 
-  void _startHostDisconnectCountdown(int seconds) {
-    _hostDisconnectTimer?.cancel();
-    setState(() => _hostDisconnectSeconds = seconds);
-    _hostDisconnectTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_hostDisconnectSeconds <= 1) {
-        timer.cancel();
-        setState(() => _hostDisconnectSeconds = 0);
-      } else {
-        setState(() => _hostDisconnectSeconds--);
-      }
-    });
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      context.read<OnlineBloc>().add(OnlineLeaveRoom());
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<OnlineBloc, OnlineState>(
       listenWhen: (prev, curr) {
+        if (curr is OnlineInitial) return true;
         if (curr is OnlineRedistributingCards) return true;
         if (curr is OnlineError) return true;
         if (curr is OnlineRoundCompleted) return true;
@@ -112,6 +123,16 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         return false;
       },
       listener: (context, state) {
+        if (state is OnlineInitial) {
+          _roundCompleteTimer?.cancel();
+          if (mounted) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const HomeScreen()),
+              (route) => false,
+            );
+          }
+          return;
+        }
         if (state is OnlineRedistributingCards) {
           setState(() => _isDealing = true);
           PremiumToast.show(
@@ -196,19 +217,6 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         }
 
         if (state is OnlinePlayerTurn) {
-          // ── Disconnect countdown ──
-          final allPlayers = state.allPlayers;
-          final offlineHost = allPlayers.firstWhere(
-            (p) => !p.isOnline,
-            orElse: () => allPlayers.first,
-          );
-          if (!offlineHost.isOnline && _hostDisconnectSeconds == 0) {
-            _startHostDisconnectCountdown(30);
-          } else if (allPlayers.every((p) => p.isOnline) &&
-              _hostDisconnectSeconds > 0) {
-            _hostDisconnectTimer?.cancel();
-            setState(() => _hostDisconnectSeconds = 0);
-          }
           _lastActivePlayer = state.activePlayerName;
           if (_lastActivePlayer != null) {
             PremiumToast.show(context, "${state.activePlayerName}'s Turn");
@@ -260,7 +268,16 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
             _lastPlayedCards = List.from(currentPlayed);
           }
         } else if (state is OnlineGameFinished) {
+          if (_hasNavigatedToResult) return;
+          _hasNavigatedToResult = true;
           _roundCompleteTimer?.cancel();
+          SharedPreferences.getInstance().then((prefs) {
+            prefs.remove('active_online_room_id');
+            prefs.remove('active_online_room_code');
+            prefs.remove('active_online_player_name');
+            prefs.remove('active_online_player_uid');
+            prefs.remove('active_online_expires_at');
+          });
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (_) => GameResultScreen(
@@ -277,74 +294,8 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
         return WillPopScope(
           onWillPop: () async {
             AudioService().playTapSound();
-            print('RJDBG WILLPOP: onWillPop triggered');
-            final bloc = context.read<OnlineBloc>();
-            final roomId = bloc.currentRoomId;
-            final uid = bloc.myUid;
-            final name = bloc.myName ?? 'Player';
-            final roomCode = bloc.currentRoomCode;
-            print(
-              'RJDBG WILLPOP: bloc.currentRoomId=$roomId bloc.myUid=$uid bloc.myName=$name bloc.currentRoomCode=$roomCode',
-            );
-
-            try {
-              // Fallback: if bloc hasn't loaded room yet (e.g. left during dealing),
-              // read directly from SharedPreferences
-              final prefs = await SharedPreferences.getInstance();
-              final effectiveRoomId =
-                  roomId ?? prefs.getString('active_online_room_id');
-              final effectiveUid =
-                  uid ?? prefs.getString('active_online_player_uid');
-              final effectiveName = name != 'Player'
-                  ? name
-                  : (prefs.getString('active_online_player_name') ?? 'Player');
-              final effectiveRoomCode =
-                  roomCode ?? prefs.getString('active_online_room_code');
-
-              if (effectiveRoomId != null && effectiveUid != null) {
-                final repo = bloc.repository;
-                await repo.leaveRoom(effectiveRoomId, effectiveUid);
-                await repo.setDisconnectTimer(
-                  effectiveRoomId,
-                  effectiveUid,
-                  effectiveName,
-                );
-                print(
-                  'RJDBG WILLPOP: leaveRoom + setDisconnectTimer called for roomId=$effectiveRoomId',
-                );
-
-                final disconnectData = await repo.getDisconnectData(
-                  effectiveRoomId,
-                );
-                final expiresAt = disconnectData != null
-                    ? (disconnectData['expiresAt'] as int? ?? 0)
-                    : (DateTime.now().millisecondsSinceEpoch + 30000);
-
-                await prefs.setString('active_online_room_id', effectiveRoomId);
-                if (effectiveRoomCode != null)
-                  await prefs.setString(
-                    'active_online_room_code',
-                    effectiveRoomCode,
-                  );
-                await prefs.setString(
-                  'active_online_player_name',
-                  effectiveName,
-                );
-                await prefs.setString('active_online_player_uid', effectiveUid);
-                await prefs.setInt('active_online_expires_at', expiresAt);
-                print(
-                  'RJDBG WILLPOP: prefs re-saved, roomId=$effectiveRoomId expiresAt=$expiresAt',
-                );
-              } else {
-                print(
-                  'RJDBG WILLPOP: SKIPPED save — roomId or uid was null from both bloc and prefs',
-                );
-              }
-            } catch (e, st) {
-              print('RJDBG WILLPOP ERROR: $e');
-              print('RJDBG WILLPOP STACK: $st');
-            }
-
+            // Dispatch a clean leave event which clears session and marks offline
+            context.read<OnlineBloc>().add(OnlineLeaveRoom());
             if (mounted) {
               Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -418,33 +369,44 @@ class _OnlineGameScreenState extends State<OnlineGameScreen> {
                     ),
                   ),
                 ),
-                // ── Player Disconnect Countdown Red Circle in the Corner ──
-                if (_hostDisconnectSeconds > 0)
+                // ── Minimal Room Code Chip at Top Right ──
+                if (_displayRoomCode != null && _displayRoomCode!.isNotEmpty)
                   Positioned(
-                    top: MediaQuery.of(context).padding.top + 16,
-                    right: 16,
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.red.shade900.withOpacity(0.9),
-                        border: Border.all(color: Colors.redAccent, width: 2.5),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.4),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
+                    top: MediaQuery.of(context).padding.top + 8,
+                    right: 12,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: InkWell(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: _displayRoomCode!));
+                          AudioService().playTapSound();
+                          PremiumToast.show(context, 'Code $_displayRoomCode copied!');
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1A2C1A).withOpacity(0.85),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFD3AC47), width: 1.2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.35),
+                                blurRadius: 4,
+                                offset: const Offset(0, 1),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        '$_hostDisconnectSeconds',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                          child: Text(
+                            _displayRoomCode!,
+                            style: const TextStyle(
+                              color: Color(0xFFF2D87B),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              letterSpacing: 1.0,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
                         ),
                       ),
                     ),

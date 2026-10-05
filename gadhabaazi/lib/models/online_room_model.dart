@@ -4,19 +4,32 @@ class OnlinePlayerModel {
   final String name;
   final bool isOnline;
   final int joinedAt;
+  final int lastSeen;
 
   const OnlinePlayerModel({
     required this.uid,
     required this.name,
     required this.isOnline,
     required this.joinedAt,
+    this.lastSeen = 0,
   });
+
+  bool get isActive {
+    if (!isOnline) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final effectiveLastSeen = lastSeen > 0 ? lastSeen : joinedAt;
+    if (effectiveLastSeen > 0) {
+      return (now - effectiveLastSeen) < 6000;
+    }
+    return true;
+  }
 
   Map<String, dynamic> toJson() => {
         'uid': uid,
         'name': name,
         'isOnline': isOnline,
         'joinedAt': joinedAt,
+        'lastSeen': lastSeen,
       };
 
   factory OnlinePlayerModel.fromJson(String uid, Map<Object?, Object?> json) {
@@ -25,15 +38,17 @@ class OnlinePlayerModel {
       name: json['name'] as String? ?? 'Unknown',
       isOnline: json['isOnline'] as bool? ?? false,
       joinedAt: json['joinedAt'] as int? ?? 0,
+      lastSeen: json['lastSeen'] as int? ?? 0,
     );
   }
 
-  OnlinePlayerModel copyWith({bool? isOnline}) {
+  OnlinePlayerModel copyWith({bool? isOnline, int? lastSeen}) {
     return OnlinePlayerModel(
       uid: uid,
       name: name,
       isOnline: isOnline ?? this.isOnline,
       joinedAt: joinedAt,
+      lastSeen: lastSeen ?? this.lastSeen,
     );
   }
 }
@@ -74,4 +89,22 @@ class OnlineRoomModel {
         'maxPlayers': maxPlayers,
         'createdAt': createdAt,
       };
+
+  OnlineRoomModel copyWith({
+    String? roomId,
+    String? roomCode,
+    String? hostId,
+    String? status,
+    int? maxPlayers,
+    int? createdAt,
+  }) {
+    return OnlineRoomModel(
+      roomId: roomId ?? this.roomId,
+      roomCode: roomCode ?? this.roomCode,
+      hostId: hostId ?? this.hostId,
+      status: status ?? this.status,
+      maxPlayers: maxPlayers ?? this.maxPlayers,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
 }

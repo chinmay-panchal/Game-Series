@@ -48,6 +48,8 @@ class OnlineLeaveRoom extends OnlineEvent {}
 
 class OnlineRestartRoom extends OnlineEvent {}
 
+class OnlineReassertPresence extends OnlineEvent {}
+
 /// Internal: fired when the RTDB gameState stream emits
 class RemoteGameStateUpdated extends OnlineEvent {
   final Map<Object?, Object?> data;
@@ -80,6 +82,14 @@ class RoomStatusChanged extends OnlineEvent {
   List<Object?> get props => [status];
 }
 
+/// Internal: fired when room meta changes (e.g. hostId, status)
+class RoomMetaChanged extends OnlineEvent {
+  final Map<Object?, Object?> meta;
+  const RoomMetaChanged(this.meta);
+  @override
+  List<Object?> get props => [meta];
+}
+
 /// Internal: fired when my hand stream updates (guests)
 class MyHandUpdated extends OnlineEvent {
   final List<PlayingCard> cards;
@@ -88,19 +98,10 @@ class MyHandUpdated extends OnlineEvent {
   List<Object?> get props => [cards];
 }
 
-class RejoinExistingRoom extends OnlineEvent {
-  final String roomId;
-  final String playerName;
-  final String uid;
-  const RejoinExistingRoom({required this.roomId, required this.playerName, required this.uid});
+/// Internal: fired (host only) when an online player goes offline — triggers card redistribution
+class OnlinePlayerLeft extends OnlineEvent {
+  final String playerUid;
+  const OnlinePlayerLeft(this.playerUid);
   @override
-  List<Object?> get props => [roomId, playerName, uid];
+  List<Object?> get props => [playerUid];
 }
-
-class DisconnectDataUpdated extends OnlineEvent {
-  final Map<Object?, Object?>? data;
-  const DisconnectDataUpdated(this.data);
-  @override
-  List<Object?> get props => [data];
-}
-

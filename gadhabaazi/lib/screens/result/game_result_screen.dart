@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:confetti/confetti.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../blocs/game/game_bloc.dart';
 import '../../blocs/game/game_event.dart';
 import '../../blocs/online/online_bloc.dart';
 import '../../blocs/online/online_event.dart';
 import '../../blocs/online/online_state.dart';
 import '../../widgets/animated_background.dart';
-import '../../core/constants/app_colors.dart';
-import '../../core/constants/app_strings.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../home/home_screen.dart';
 import '../online/waiting_room_screen.dart';
@@ -39,6 +38,7 @@ class _GameResultScreenState extends State<GameResultScreen> {
   @override
   void initState() {
     super.initState();
+    _clearOnlineSession();
     _confettiController = ConfettiController(
       duration: const Duration(seconds: 3),
     );
@@ -46,6 +46,17 @@ class _GameResultScreenState extends State<GameResultScreen> {
 
     // Play ending sound
     AudioService().playEndingBgm();
+  }
+
+  Future<void> _clearOnlineSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('active_online_room_id');
+      await prefs.remove('active_online_room_code');
+      await prefs.remove('active_online_player_name');
+      await prefs.remove('active_online_player_uid');
+      await prefs.remove('active_online_expires_at');
+    } catch (_) {}
   }
 
   @override

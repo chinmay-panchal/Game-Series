@@ -9,6 +9,9 @@ class AudioService {
   final AudioPlayer _tapPlayer = AudioPlayer(); // Separate for quick tap sounds
 
   AudioService._internal() {
+    AudioLogger.logLevel = AudioLogLevel.error;
+    _sfxPlayer.setPlayerMode(PlayerMode.lowLatency);
+    _tapPlayer.setPlayerMode(PlayerMode.lowLatency);
     _bgmPlayer.setReleaseMode(ReleaseMode.loop);
   }
 
