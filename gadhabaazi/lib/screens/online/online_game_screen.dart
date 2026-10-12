@@ -99,6 +99,8 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.detached) {
       context.read<OnlineBloc>().add(OnlineLeaveRoom());
+    } else if (state == AppLifecycleState.resumed) {
+      context.read<OnlineBloc>().add(OnlineReassertPresence());
     }
   }
 
@@ -293,16 +295,8 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
       builder: (context, state) {
         return WillPopScope(
           onWillPop: () async {
-            AudioService().playTapSound();
-            // Dispatch a clean leave event which clears session and marks offline
-            context.read<OnlineBloc>().add(OnlineLeaveRoom());
-            if (mounted) {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const HomeScreen()),
-                (route) => false,
-              );
-            }
-            return false;
+            final hasWon = context.read<OnlineBloc>().isCurrentPlayerWon;
+            return await _confirmExit(context, hasWon: hasWon);
           },
           child: Scaffold(
             body: Stack(
@@ -687,7 +681,26 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
       );
     }
 
+    if (state is OnlineWaitingForTurn) {
+      if (state.myHand.isEmpty) {
+        return _buildSpectatorArea(context);
+      }
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: CategorizedHandWidget(
+          cards: state.myHand,
+          selectedCard: null,
+          currentSuit: state.currentRound?.suit,
+          isCardEnabled: (_) => false,
+          onCardTap: (_) {},
+        ),
+      );
+    }
+
     if (state is OnlinePlayerTurn) {
+      if (state.myHand.isEmpty) {
+        return _buildSpectatorArea(context);
+      }
       // Only show interactive hand if it's actually YOUR turn
       if (!state.isMyTurn) {
         return Padding(
@@ -709,6 +722,128 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
     }
 
     return const SizedBox(height: 48);
+  }
+
+  Widget _buildSpectatorArea(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E3A24),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF4CAF50), width: 1.5),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 8,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Icon(Icons.emoji_events, color: Color(0xFFFFD700), size: 24),
+              SizedBox(width: 8),
+              Text(
+                'You Won! Spectating match',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'All your cards are over. You can watch the remaining players or exit to the main menu without any penalty.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFFC2C8A4), fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.exit_to_app, size: 16, color: Color(0xFFFFD700)),
+            label: const Text(
+              'Exit to Main Menu',
+              style: TextStyle(
+                color: Color(0xFFFFD700),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFFFFD700), width: 1.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            ),
+            onPressed: () => _confirmExit(context, hasWon: true),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _confirmExit(BuildContext context, {required bool hasWon}) async {
+    AudioService().playTapSound();
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: hasWon ? const Color(0xFF4CAF50) : const Color(0xFFD32F2F),
+            width: 1.5,
+          ),
+        ),
+        title: Text(
+          hasWon ? 'Exit to Main Menu?' : 'Forfeit Game?',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          hasWon
+              ? 'You have already finished all your cards and won! You can leave safely without any penalty.'
+              : 'You still have cards in your hand! If you exit now, you will forfeit and become the Gadha (Donkey)!',
+          style: const TextStyle(color: Color(0xFFC2C8A4)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              hasWon ? 'Stay & Watch' : 'Keep Playing',
+              style: const TextStyle(color: Color(0xFFC2C8A4)),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: hasWon ? const Color(0xFF2E7D32) : const Color(0xFFC62828),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(hasWon ? 'Exit Game' : 'Leave (Become Gadha)'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldExit == true && mounted) {
+      context.read<OnlineBloc>().add(OnlineLeaveRoom());
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        (route) => false,
+      );
+      return true;
+    }
+    return false;
   }
 
   Widget _buildMyTurnArea(BuildContext context, OnlinePlayerTurn state) {

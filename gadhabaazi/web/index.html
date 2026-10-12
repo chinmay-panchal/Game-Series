@@ -80,10 +80,23 @@
       margin: 0 !important;
       padding: 0 !important;
     }
-
   </style>
 </head>
 <body>
+  <script>
+    // Prevent accidental reload / close during an active online match
+    window.addEventListener('beforeunload', function (e) {
+      try {
+        const inProgress = localStorage.getItem('flutter.active_game_in_progress') === 'true';
+        const hasWon = localStorage.getItem('flutter.active_player_has_won') === 'true';
+        if (inProgress && !hasWon) {
+          e.preventDefault();
+          e.returnValue = 'Leave game? If you reload or close this page during an active game, you will forfeit.';
+          return e.returnValue;
+        }
+      } catch (err) {}
+    });
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

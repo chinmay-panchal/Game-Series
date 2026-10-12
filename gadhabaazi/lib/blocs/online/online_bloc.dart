@@ -57,26 +57,38 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   StreamSubscription? _myHandSub;
   StreamSubscription? _connectionSub;
   Timer? _heartbeatTimer;
-  Timer? _presenceTimer;
-
   // Track which player UIDs we have already redistributed (prevent duplicate redistribution)
   final Set<String> _redistributedUids = {};
   bool _hasLeft = false;
 
-  // Presence & activity tracking (clock-skew safe)
+  // Finished / Won players tracking
+  List<String> _finishedPlayerUids = [];
+
+  bool isPlayerWon(String uid) {
+    if (_finishedPlayerUids.contains(uid)) return true;
+    if (_isHost && _hostGameState != null) {
+      final myIdx = _gamePlayers.indexWhere((p) => p.uid == uid);
+      if (myIdx >= 0 && myIdx < _hostGameState!.players.length) {
+        return _hostGameState!.players[myIdx].hand.isEmpty;
+      }
+    }
+    if (uid == _myUid && _isGameActive && _myHand.isEmpty && _gamePlayers.isNotEmpty) {
+      return true;
+    }
+    return false;
+  }
+
+  bool get isCurrentPlayerWon => _myUid != null && isPlayerWon(_myUid!);
+  bool get _hasWon => isCurrentPlayerWon;
+
+  // Presence & activity tracking: Rely on Firebase RTDB onDisconnect
+  // to avoid false disconnects when user is on a phone call or minimized.
   final Map<String, int> _playerLastHeardLocal = {};
   final Map<String, int> _playerLastSeenRemote = {};
 
   bool _isPlayerActive(OnlinePlayerModel p) {
     if (p.uid == _myUid) return true;
-    if (!p.isOnline) return false;
-    final lastHeard = _playerLastHeardLocal[p.uid];
-    if (lastHeard == null) {
-      _playerLastHeardLocal[p.uid] = DateTime.now().millisecondsSinceEpoch;
-      return true;
-    }
-    final now = DateTime.now().millisecondsSinceEpoch;
-    return (now - lastHeard) < 7000;
+    return p.isOnline;
   }
 
   bool get _isGameActive =>
@@ -130,6 +142,8 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       await prefs.remove('active_online_room_code');
       await prefs.remove('active_online_player_name');
       await prefs.remove('active_online_player_uid');
+      await prefs.remove('active_game_in_progress');
+      await prefs.remove('active_player_has_won');
     } catch (_) {}
   }
 
@@ -180,22 +194,11 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _presenceTimer?.cancel();
 
-    // 1. Send heartbeat every 2 seconds to RTDB
+    // Send heartbeat every 2 seconds to RTDB to indicate active presence
     _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
       if (_room != null && _myUid != null) {
         repository.updatePlayerPresence(_room!.roomId, _myUid!);
-      }
-    });
-
-    // 2. Local check: if any player is inactive during active game, re-evaluate presence
-    _presenceTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
-      if (_room != null && _isGameActive && _players.isNotEmpty) {
-        final hasInactive = _players.any((p) => !_isPlayerActive(p));
-        if (hasInactive) {
-          add(PlayersUpdated(List.from(_players)));
-        }
       }
     });
   }
@@ -203,8 +206,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   void _stopHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
-    _presenceTimer?.cancel();
-    _presenceTimer = null;
   }
 
   // ─── Lobby Subscriptions ───────────────────────────────────────────────────
@@ -314,6 +315,9 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
       _room = _room!.copyWith(status: 'in_progress');
       _redistributedUids.clear();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('active_game_in_progress', 'true');
+      await prefs.remove('active_player_has_won');
       _subscribeToGame(_room!.roomId);
       _emitHostGameState(emit);
     } catch (e) {
@@ -540,29 +544,57 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     // ─── Active Gameplay Handling ───────────────────────────────────────────
     if (_room != null && (_room!.status == 'in_progress' || _isGameActive)) {
-      final activePlayers = _players.where((p) => _isPlayerActive(p)).toList();
-      final inactivePlayers = _players.where((p) => !_isPlayerActive(p)).toList();
+      final offlinePlayers = _players.where((p) => !p.isOnline).toList();
       final missingPlayers = _gamePlayers
           .where((gp) => !_players.any((p) => p.uid == gp.uid))
           .toList();
+      final allDeparted = [...offlinePlayers, ...missingPlayers];
 
-      // Simple rule: if ANY player left or went offline during active game,
-      // end the game immediately! The departing player is the loser (donkey).
-      if (inactivePlayers.isNotEmpty || missingPlayers.isNotEmpty) {
-        final donkeyPlayer = inactivePlayers.isNotEmpty
-            ? inactivePlayers.first
-            : missingPlayers.first;
+      // Check if any departed player has NOT won yet
+      final forfeitingDeparted = allDeparted
+          .where((p) => !isPlayerWon(p.uid))
+          .toList();
 
+      if (forfeitingDeparted.isNotEmpty) {
+        final donkeyPlayer = forfeitingDeparted.first;
         final donkeyName = donkeyPlayer.name;
-        final winnerNames = activePlayers
-            .where((p) => p.uid != donkeyPlayer.uid)
+
+        // Build finishing order:
+        // 1. Players who already won (in finishing order)
+        final finishedNames = _finishedPlayerUids.map((uid) {
+          return _gamePlayers.firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => _players.firstWhere(
+              (p) => p.uid == uid,
+              orElse: () => OnlinePlayerModel(
+                uid: uid,
+                name: uid,
+                isOnline: true,
+                joinedAt: 0,
+              ),
+            ),
+          ).name;
+        }).toList();
+
+        // 2. Active online players who didn't forfeit
+        final otherActiveNames = _players
+            .where((p) => p.isOnline && p.uid != donkeyPlayer.uid && !_finishedPlayerUids.contains(p.uid))
             .map((p) => p.name)
             .toList();
-        if (winnerNames.isEmpty && _myName != null) {
-          winnerNames.add(_myName!);
-        }
 
-        final finishingOrder = [...winnerNames, donkeyName];
+        final finishingOrder = <String>[];
+        for (final name in finishedNames) {
+          if (!finishingOrder.contains(name)) finishingOrder.add(name);
+        }
+        for (final name in otherActiveNames) {
+          if (!finishingOrder.contains(name)) finishingOrder.add(name);
+        }
+        if (finishingOrder.isEmpty && _myName != null && _myName != donkeyName) {
+          finishingOrder.add(_myName!);
+        }
+        if (!finishingOrder.contains(donkeyName)) {
+          finishingOrder.add(donkeyName);
+        }
 
         await repository.forfeitRoom(_room!.roomId, donkeyPlayer.uid, donkeyName);
         await _clearSession();
@@ -572,6 +604,65 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
           finishingOrder: finishingOrder,
         ));
         return;
+      }
+
+      // If forfeitingDeparted is empty, all departed players had ALREADY WON!
+      // Check remaining unfinished players who are actively playing:
+      final remainingUnfinishedPlayers = _players
+          .where((p) => p.isOnline && !isPlayerWon(p.uid))
+          .toList();
+
+      if (remainingUnfinishedPlayers.length == 1) {
+        // Sole remaining unfinished player has lost and is the Donkey!
+        final donkeyPlayer = remainingUnfinishedPlayers.first;
+        final donkeyName = donkeyPlayer.name;
+
+        final finishedNames = _finishedPlayerUids.map((uid) {
+          return _gamePlayers.firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => _players.firstWhere(
+              (p) => p.uid == uid,
+              orElse: () => OnlinePlayerModel(
+                uid: uid,
+                name: uid,
+                isOnline: true,
+                joinedAt: 0,
+              ),
+            ),
+          ).name;
+        }).toList();
+
+        final finishingOrder = <String>[];
+        for (final name in finishedNames) {
+          if (!finishingOrder.contains(name)) finishingOrder.add(name);
+        }
+        if (!finishingOrder.contains(donkeyName)) {
+          finishingOrder.add(donkeyName);
+        }
+
+        if (_isHost) {
+          await repository.completeRoom(_room!.roomId);
+        }
+        await _clearSession();
+
+        emit(OnlineGameFinished(
+          donkeyName: donkeyName,
+          finishingOrder: finishingOrder,
+        ));
+        return;
+      }
+
+      // Check if host went offline (even if they already won)
+      final hostIsOnline = _players.any((p) => p.uid == _room!.hostId && p.isOnline);
+      if (!hostIsOnline && remainingUnfinishedPlayers.isNotEmpty) {
+        final newHost = remainingUnfinishedPlayers.first;
+        if (newHost.uid == _myUid) {
+          await repository.claimHost(_room!.roomId, newHost.uid);
+          _room = _room!.copyWith(hostId: newHost.uid);
+          _isHost = true;
+          _subscribeToGame(_room!.roomId);
+          await _takeOverHostState();
+        }
       }
     }
 
@@ -766,15 +857,93 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       _isHost = (_room!.hostId == _myUid);
     }
 
-    if (status == 'in_progress' && !_isHost) {
-      if (_gamePlayers.isEmpty && _players.isNotEmpty) {
-        _gamePlayers = List.from(_players);
+    if (status == 'in_progress') {
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString('active_game_in_progress', 'true');
+      });
+      if (_isHost && _hostGameState == null) {
+        _subscribeToGame(_room!.roomId);
+        _takeOverHostState();
+      } else if (!_isHost) {
+        if (_gamePlayers.isEmpty && _players.isNotEmpty) {
+          _gamePlayers = List.from(_players);
+        }
+        _subscribeToGame(_room!.roomId);
       }
-      _subscribeToGame(_room!.roomId);
     } else if (status == 'waiting') {
       if (state is OnlineWaiting) {
         emit(OnlineWaiting(room: _room!, players: _players, isHost: _isHost));
       }
+    }
+  }
+
+  Future<void> _takeOverHostState() async {
+    if (_room == null) return;
+    try {
+      final hands = await repository.getAllHands(_room!.roomId);
+      final data = _lastReceivedGameState;
+      if (data == null) return;
+      final playerOrder = (data['playerOrder'] as List<Object?>? ?? [])
+          .map((e) => e.toString())
+          .toList();
+      final activeIdx = data['activePlayerIndex'] as int? ?? 0;
+      final phaseStr = data['phase'] as String? ?? 'playerTurn';
+
+      final enginePlayers = <Player>[];
+      for (int i = 0; i < playerOrder.length; i++) {
+        final uid = playerOrder[i];
+        final name = _gamePlayers.firstWhere(
+          (p) => p.uid == uid,
+          orElse: () => _players.firstWhere(
+            (p) => p.uid == uid,
+            orElse: () => OnlinePlayerModel(
+              uid: uid,
+              name: 'Player $i',
+              isOnline: true,
+              joinedAt: 0,
+            ),
+          ),
+        ).name;
+        final hand = hands[uid] ?? [];
+        enginePlayers.add(Player(id: 'p$i', name: name, hand: hand));
+      }
+
+      final finishedUids = (data['finishedPlayerUids'] as List<Object?>? ?? [])
+          .map((e) => e.toString())
+          .toList();
+      final finishedIds = finishedUids.map((uid) {
+        final idx = playerOrder.indexOf(uid);
+        return idx >= 0 ? 'p$idx' : uid;
+      }).toList();
+
+      final completedRoundsRaw = data['completedRounds'] as List<Object?>? ?? [];
+      final completedRounds = <RoundModel>[];
+      for (final cr in completedRoundsRaw) {
+        if (cr is Map<Object?, Object?>) {
+          completedRounds.add(_parseRound(cr));
+        }
+      }
+
+      RoundModel? currentRound;
+      if (data['currentRound'] is Map<Object?, Object?>) {
+        currentRound = _parseRound(data['currentRound'] as Map<Object?, Object?>);
+      }
+
+      final phase = GamePhase.values.firstWhere(
+        (e) => e.name == phaseStr,
+        orElse: () => GamePhase.playerTurn,
+      );
+
+      _hostGameState = engine.GameState(
+        players: enginePlayers,
+        activePlayerIndex: activeIdx,
+        phase: phase,
+        completedRounds: completedRounds,
+        currentRound: currentRound,
+        finishedPlayerIds: finishedIds,
+      );
+    } catch (e) {
+      debugPrint('Error taking over host state: $e');
     }
   }
 
@@ -805,6 +974,11 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
   void _emitHostGameState(Emitter<OnlineState> emit) {
     if (_hostGameState == null) return;
+    if (_hasWon) {
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString('active_player_has_won', 'true');
+      });
+    }
     final gs = _hostGameState!;
     final activeIdx = gs.activePlayerIndex;
     final activeEnginePlayer = gs.players[activeIdx];
@@ -951,6 +1125,17 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     if (playerOrder.isEmpty) return;
 
+    final finishedUids = (data['finishedPlayerUids'] as List<Object?>? ?? [])
+        .map((e) => e.toString())
+        .toList();
+    _finishedPlayerUids = finishedUids;
+
+    if (_hasWon) {
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setString('active_player_has_won', 'true');
+      });
+    }
+
     final activeUid = activeIdx < playerOrder.length
         ? playerOrder[activeIdx]
         : '';
@@ -998,7 +1183,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       ).name;
     }
 
-    final myIdx = playerOrder.indexOf(_myUid!);
+    final myIdx = _myUid != null ? playerOrder.indexOf(_myUid!) : -1;
 
     switch (phase) {
       case 'playerTurn':
@@ -1232,6 +1417,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       final idx = gs.players.indexWhere((p) => p.id == id);
       return idx >= 0 && idx < playerUids.length ? playerUids[idx] : id;
     }).toList();
+    _finishedPlayerUids = finishedUids;
 
     return {
       'phase': phase,
@@ -1314,6 +1500,8 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     final uid = _myUid;
     final name = _myName ?? 'Player';
     final wasGameActive = _isGameActive;
+    final hasAlreadyWon = _hasWon;
+    final wasHost = _isHost;
 
     _room = null;
     _myUid = null;
@@ -1328,9 +1516,23 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     if (roomId != null && uid != null) {
       if (wasGameActive) {
-        // Simple rule: if anybody leaves during active game, end the game immediately;
-        // the one who exits is the loser (donkey)!
-        await repository.forfeitRoom(roomId, uid, name);
+        if (hasAlreadyWon) {
+          // Player already finished and won! They can leave safely without becoming donkey.
+          if (wasHost) {
+            final otherOnline = _players.where((p) => p.uid != uid && p.isOnline).toList();
+            if (otherOnline.isNotEmpty) {
+              final nextHost = otherOnline.firstWhere(
+                (p) => !isPlayerWon(p.uid),
+                orElse: () => otherOnline.first,
+              );
+              await repository.claimHost(roomId, nextHost.uid);
+            }
+          }
+          await repository.leaveRoom(roomId, uid);
+        } else {
+          // Leaving an active game before winning forfeits and makes the player the donkey!
+          await repository.forfeitRoom(roomId, uid, name);
+        }
       } else {
         await repository.leaveRoom(roomId, uid);
       }
@@ -1341,6 +1543,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     _stopHeartbeat();
     _playerLastHeardLocal.clear();
     _playerLastSeenRemote.clear();
+    _finishedPlayerUids.clear();
     _playersSub?.cancel();
     _statusSub?.cancel();
     _gameStateSub?.cancel();

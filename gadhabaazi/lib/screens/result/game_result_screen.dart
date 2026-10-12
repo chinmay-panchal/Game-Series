@@ -56,6 +56,8 @@ class _GameResultScreenState extends State<GameResultScreen> {
       await prefs.remove('active_online_player_name');
       await prefs.remove('active_online_player_uid');
       await prefs.remove('active_online_expires_at');
+      await prefs.remove('active_game_in_progress');
+      await prefs.remove('active_player_has_won');
     } catch (_) {}
   }
 
