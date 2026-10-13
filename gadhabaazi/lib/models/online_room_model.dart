@@ -6,12 +6,15 @@ class OnlinePlayerModel {
   final int joinedAt;
   final int lastSeen;
 
+  final bool hasWon;
+
   const OnlinePlayerModel({
     required this.uid,
     required this.name,
     required this.isOnline,
     required this.joinedAt,
     this.lastSeen = 0,
+    this.hasWon = false,
   });
 
   bool get isActive {
@@ -30,6 +33,7 @@ class OnlinePlayerModel {
         'isOnline': isOnline,
         'joinedAt': joinedAt,
         'lastSeen': lastSeen,
+        'hasWon': hasWon,
       };
 
   factory OnlinePlayerModel.fromJson(String uid, Map<Object?, Object?> json) {
@@ -39,16 +43,18 @@ class OnlinePlayerModel {
       isOnline: json['isOnline'] as bool? ?? false,
       joinedAt: json['joinedAt'] as int? ?? 0,
       lastSeen: json['lastSeen'] as int? ?? 0,
+      hasWon: json['hasWon'] as bool? ?? false,
     );
   }
 
-  OnlinePlayerModel copyWith({bool? isOnline, int? lastSeen}) {
+  OnlinePlayerModel copyWith({bool? isOnline, int? lastSeen, bool? hasWon}) {
     return OnlinePlayerModel(
       uid: uid,
       name: name,
       isOnline: isOnline ?? this.isOnline,
       joinedAt: joinedAt,
       lastSeen: lastSeen ?? this.lastSeen,
+      hasWon: hasWon ?? this.hasWon,
     );
   }
 }

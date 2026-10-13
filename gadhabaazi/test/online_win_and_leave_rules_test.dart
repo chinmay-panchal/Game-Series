@@ -78,6 +78,13 @@ class MockRoomRepository extends Fake implements RoomRepository {
   Future<void> updatePlayerPresence(String roomId, String uid) async {}
 
   @override
+  Stream<Set<String>> wonPlayerUidsStream(String roomId) =>
+      Stream.value({});
+
+  @override
+  Future<void> markPlayerWon(String roomId, String uid) async {}
+
+  @override
   Future<void> forfeitRoom(String roomId, String forfeitingUid, String forfeitingName) async {
     forfeitCalled = true;
     forfeitedUid = forfeitingUid;
@@ -91,7 +98,7 @@ class MockRoomRepository extends Fake implements RoomRepository {
   }
 
   @override
-  Future<void> completeRoom(String roomId) async {
+  Future<void> completeRoom(String roomId, {String? donkeyUid, String? donkeyName}) async {
     completeRoomCalled = true;
   }
 
@@ -216,7 +223,7 @@ void main() {
 
       // Set up game with 3 players
       final players = [
-        const OnlinePlayerModel(uid: 'u1', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
+        const OnlinePlayerModel(uid: 'test-user-uid', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u2', name: 'LeaverBob', isOnline: true, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u3', name: 'PlayingCharlie', isOnline: true, joinedAt: 0),
       ];
@@ -228,14 +235,14 @@ void main() {
       bloc.add(RemoteGameStateUpdated({
         'phase': 'playerTurn',
         'activePlayerIndex': 1,
-        'playerOrder': ['u1', 'u2', 'u3'],
-        'finishedPlayerUids': ['u1'],
+        'playerOrder': ['test-user-uid', 'u2', 'u3'],
+        'finishedPlayerUids': ['test-user-uid'],
       }));
       await pumpEventQueue();
 
       // LeaverBob (who has NOT won) goes offline
       final playersAfterBobLeaves = [
-        const OnlinePlayerModel(uid: 'u1', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
+        const OnlinePlayerModel(uid: 'test-user-uid', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u2', name: 'LeaverBob', isOnline: false, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u3', name: 'PlayingCharlie', isOnline: true, joinedAt: 0),
       ];
@@ -259,7 +266,7 @@ void main() {
       await pumpEventQueue();
 
       final players = [
-        const OnlinePlayerModel(uid: 'u1', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
+        const OnlinePlayerModel(uid: 'test-user-uid', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u2', name: 'WinnerBob', isOnline: true, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u3', name: 'LastCharlie', isOnline: true, joinedAt: 0),
       ];
@@ -271,14 +278,14 @@ void main() {
       bloc.add(RemoteGameStateUpdated({
         'phase': 'playerTurn',
         'activePlayerIndex': 2,
-        'playerOrder': ['u1', 'u2', 'u3'],
-        'finishedPlayerUids': ['u1', 'u2'],
+        'playerOrder': ['test-user-uid', 'u2', 'u3'],
+        'finishedPlayerUids': ['test-user-uid', 'u2'],
       }));
       await pumpEventQueue();
 
       // WinnerBob exits after winning
       final playersAfterBobLeaves = [
-        const OnlinePlayerModel(uid: 'u1', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
+        const OnlinePlayerModel(uid: 'test-user-uid', name: 'WinnerAlice', isOnline: true, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u2', name: 'WinnerBob', isOnline: false, joinedAt: 0),
         const OnlinePlayerModel(uid: 'u3', name: 'LastCharlie', isOnline: true, joinedAt: 0),
       ];

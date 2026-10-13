@@ -244,13 +244,36 @@ class RoomRepository {
     required String roomId,
     required Map<String, dynamic> gameState,
     required Map<String, List<Map<String, dynamic>>> handsPerPlayer,
+    List<String>? wonPlayerUids,
   }) async {
     final updates = <String, dynamic>{};
     updates['rooms/$roomId/gameState'] = gameState;
     for (final uid in handsPerPlayer.keys) {
       updates['rooms/$roomId/hands/$uid/cards'] = handsPerPlayer[uid];
     }
+    if (wonPlayerUids != null) {
+      for (final uid in wonPlayerUids) {
+        updates['rooms/$roomId/players/$uid/hasWon'] = true;
+        updates['rooms/$roomId/wonPlayerUids/$uid'] = true;
+      }
+    }
     await _db.ref().update(updates);
+  }
+
+  Future<void> markPlayerWon(String roomId, String uid) async {
+    final updates = <String, dynamic>{
+      'rooms/$roomId/players/$uid/hasWon': true,
+      'rooms/$roomId/wonPlayerUids/$uid': true,
+    };
+    await _db.ref().update(updates);
+  }
+
+  Stream<Set<String>> wonPlayerUidsStream(String roomId) {
+    return _db.ref('rooms/$roomId/wonPlayerUids').onValue.map((event) {
+      if (!event.snapshot.exists || event.snapshot.value == null) return <String>{};
+      final data = event.snapshot.value as Map<Object?, Object?>;
+      return data.keys.map((k) => k.toString()).toSet();
+    });
   }
 
   // ─── Submit Move (Guest only) ──────────────────────────────────────────────
@@ -290,12 +313,14 @@ class RoomRepository {
 
   // ─── Complete game ─────────────────────────────────────────────────────────
 
-  Future<void> completeRoom(String roomId) async {
+  Future<void> completeRoom(String roomId, {String? donkeyUid, String? donkeyName}) async {
     // Mark as completed and phase as gameOver so it stops appearing as active.
     final updates = <String, dynamic>{
       'rooms/$roomId/meta/status': 'completed',
       'rooms/$roomId/gameState/phase': 'gameOver',
     };
+    if (donkeyUid != null) updates['rooms/$roomId/gameState/donkeyPlayerUid'] = donkeyUid;
+    if (donkeyName != null) updates['rooms/$roomId/gameState/donkeyPlayerName'] = donkeyName;
     await _db.ref().update(updates);
   }
 
@@ -360,6 +385,7 @@ class RoomRepository {
     updates['rooms/$roomId/gameState'] = null;
     updates['rooms/$roomId/pendingAction'] = null;
     updates['rooms/$roomId/disconnectData'] = null;
+    updates['rooms/$roomId/wonPlayerUids'] = null;
 
     if (initiatorUid != null) {
       updates['rooms/$roomId/meta/hostId'] = initiatorUid;

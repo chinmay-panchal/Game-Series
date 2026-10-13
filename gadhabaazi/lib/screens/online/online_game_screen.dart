@@ -836,7 +836,11 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
     );
 
     if (shouldExit == true && mounted) {
-      context.read<OnlineBloc>().add(OnlineLeaveRoom());
+      final bloc = context.read<OnlineBloc>();
+      if (hasWon && bloc.roomId != null && bloc.myUid != null) {
+        await bloc.repository.markPlayerWon(bloc.roomId!, bloc.myUid!);
+      }
+      bloc.add(OnlineLeaveRoom());
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const HomeScreen()),
         (route) => false,

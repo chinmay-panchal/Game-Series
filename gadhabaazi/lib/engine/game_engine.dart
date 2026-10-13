@@ -466,6 +466,12 @@ class GameEngine {
     final disconnectedPlayer = state.players[discIdx];
     final List<PlayingCard> cardsToDistribute = List.from(disconnectedPlayer.hand);
 
+    // If player already finished cards or was marked finished, they have already won!
+    // They cannot forfeit, cannot be the donkey, and have no cards to distribute.
+    if (cardsToDistribute.isEmpty || state.finishedPlayerIds.contains(disconnectedPlayerId)) {
+      return MoveResult(gameState: state, moveType: MoveType.cardPlayed);
+    }
+
     List<Player> newPlayers = List.from(state.players);
 
     // Empty the disconnected player's hand
