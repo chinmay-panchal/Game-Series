@@ -11,6 +11,7 @@ class TableCenterWidget extends StatefulWidget {
   final Map<String, String>? playerNames;
   /// When non-null, this card is shown face-down on top (punishment round)
   final PlayingCard? punishmentCard;
+  final List<PlayingCard>? punishmentCards;
 
   const TableCenterWidget({
     super.key,
@@ -18,6 +19,7 @@ class TableCenterWidget extends StatefulWidget {
     this.highestCard,
     this.playerNames,
     this.punishmentCard,
+    this.punishmentCards,
   });
 
   @override
@@ -35,7 +37,9 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
 
     final playedCards = widget.currentRound!.playedCards;
     final total = playedCards.length;
-    final hasPunishment = widget.punishmentCard != null;
+    final effPunishmentCard = widget.punishmentCard ?? widget.currentRound?.punishmentCard;
+    final effPunishmentCards = widget.punishmentCards ?? widget.currentRound?.punishmentCards;
+    final hasPunishment = effPunishmentCard != null;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHoveredOrTapped = true),
@@ -131,7 +135,7 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         CardWidget(
-                          card: widget.punishmentCard,
+                          card: effPunishmentCard,
                           faceUp: false, // face-down!
                           scale: 1.15,
                         ),
@@ -142,9 +146,11 @@ class _TableCenterWidgetState extends State<TableCenterWidget> {
                             color: Colors.red.shade900.withValues(alpha: 0.85),
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: const Text(
-                            '🃏 Punishment',
-                            style: TextStyle(
+                          child: Text(
+                            effPunishmentCards != null && effPunishmentCards.length > 1
+                                ? '🃏 Whole Suite (${effPunishmentCards.length} Cards)'
+                                : '🃏 Punishment',
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 10,
                               fontWeight: FontWeight.bold,

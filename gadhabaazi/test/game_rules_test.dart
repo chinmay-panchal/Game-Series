@@ -104,6 +104,103 @@ void main() {
       expect(starterPlayer.hand.contains(aceSpades), isTrue);
       expect(starterPlayer.hand.contains(punishCard), isTrue);
     });
+
+    test('giveWholeSuitPunishment transfers all remaining cards of that suit to target and finishes giver', () {
+      final engine = GameEngine();
+
+      // P1 leads with Hearts Ace
+      final p1 = Player(id: 'p1', name: 'Player 1', hand: [
+        PlayingCard(suit: Suit.hearts, rank: Rank.ace),
+        PlayingCard(suit: Suit.diamonds, rank: Rank.five),
+      ]);
+      // P2 has only one suit remaining: 3 Spades (♠3, ♠7, ♠K)
+      final p2Spades = [
+        PlayingCard(suit: Suit.spades, rank: Rank.three),
+        PlayingCard(suit: Suit.spades, rank: Rank.seven),
+        PlayingCard(suit: Suit.spades, rank: Rank.king),
+      ];
+      final p2 = Player(id: 'p2', name: 'Player 2', hand: List.from(p2Spades));
+
+      // P3 has other cards
+      final p3 = Player(id: 'p3', name: 'Player 3', hand: [
+        PlayingCard(suit: Suit.hearts, rank: Rank.two),
+        PlayingCard(suit: Suit.clubs, rank: Rank.nine),
+      ]);
+
+      var state = GameState(
+        players: [p1, p2, p3],
+        activePlayerIndex: 0,
+        phase: GamePhase.playerTurn,
+        completedRounds: [
+          RoundModel(roundNumber: 1, suit: Suit.clubs, leadPlayerId: 'p1'),
+        ],
+      );
+
+      // P1 plays ♥A
+      var res = engine.playCard(state, 'p1', PlayingCard(suit: Suit.hearts, rank: Rank.ace));
+      expect(res.moveType, MoveType.cardPlayed);
+      state = res.gameState;
+
+      // Advance to P2
+      res = engine.continueAfterTransition(state);
+      state = res.gameState;
+      expect(state.activePlayerIndex, 1);
+
+      // P2 cannot follow Hearts and has ONLY Spades (single category remaining)
+      final wholeRes = engine.giveWholeSuitPunishment(state, 'p2');
+      expect(wholeRes.moveType, isNot(MoveType.invalidMove), reason: wholeRes.message);
+      state = wholeRes.gameState;
+
+      // P2 hand is now EMPTY and P2 is in finishedPlayerIds
+      final updatedP2 = state.players.firstWhere((p) => p.id == 'p2');
+      expect(updatedP2.hand, isEmpty);
+      expect(state.finishedPlayerIds.contains('p2'), isTrue);
+
+      // P1 (who played highest card ♥A) receives ♥A from table + all 3 spades from P2
+      final updatedP1 = state.players.firstWhere((p) => p.id == 'p1');
+      for (final sp in p2Spades) {
+        expect(updatedP1.hand.contains(sp), isTrue);
+      }
+      expect(updatedP1.hand.contains(PlayingCard(suit: Suit.hearts, rank: Rank.ace)), isTrue);
+
+      // Round info contains punishmentCards
+      expect(state.completedRounds.last.punishmentCards?.length, equals(3));
+      expect(state.completedRounds.last.winnerId, equals('p2'));
+    });
+
+    test('giveWholeSuitPunishment fails if player has multiple suits remaining (e.g. 1 spade and 2 diamonds)', () {
+      final engine = GameEngine();
+
+      final p1 = Player(id: 'p1', name: 'Player 1', hand: [
+        PlayingCard(suit: Suit.hearts, rank: Rank.ace),
+      ]);
+      // P2 has 1 spade and 2 diamonds (more than 1 suit category)
+      final p2 = Player(id: 'p2', name: 'Player 2', hand: [
+        PlayingCard(suit: Suit.spades, rank: Rank.three),
+        PlayingCard(suit: Suit.diamonds, rank: Rank.seven),
+        PlayingCard(suit: Suit.diamonds, rank: Rank.king),
+      ]);
+
+      var state = GameState(
+        players: [p1, p2],
+        activePlayerIndex: 0,
+        phase: GamePhase.playerTurn,
+        completedRounds: [
+          RoundModel(roundNumber: 1, suit: Suit.clubs, leadPlayerId: 'p1'),
+        ],
+      );
+
+      // P1 plays ♥A
+      var res = engine.playCard(state, 'p1', PlayingCard(suit: Suit.hearts, rank: Rank.ace));
+      state = res.gameState;
+      res = engine.continueAfterTransition(state);
+      state = res.gameState;
+
+      // P2 tries to giveWholeSuitPunishment but has 2 suits
+      final failRes = engine.giveWholeSuitPunishment(state, 'p2');
+      expect(failRes.moveType, MoveType.invalidMove);
+      expect(failRes.message, contains('only one'));
+    });
   });
 
   group('Unending Loop Detection (3 Rounds)', () {

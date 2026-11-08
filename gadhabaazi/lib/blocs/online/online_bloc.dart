@@ -33,6 +33,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
   String? _myUid;
   String? _myName;
   bool _isHost = false;
+  bool get isHost => _isHost;
   List<OnlinePlayerModel> _players = [];
   List<OnlinePlayerModel> _gamePlayers = [];
 
@@ -116,6 +117,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     on<HostStartGame>(_onHostStartGame);
     on<OnlinePlayCard>(_onPlayCard);
     on<OnlineGivePunishment>(_onGivePunishment);
+    on<OnlineGiveWholeSuitPunishment>(_onGiveWholeSuitPunishment);
     on<OnlineStartNextRound>(_onStartNextRound);
     on<OnlineDistributeNewCards>(_onDistributeNewCards);
     on<OnlineLeaveRoom>(_onLeaveRoom);
@@ -406,6 +408,30 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
     _emitHostGameState(emit);
   }
 
+  Future<void> _onGiveWholeSuitPunishment(
+    OnlineGiveWholeSuitPunishment event,
+    Emitter<OnlineState> emit,
+  ) async {
+    if (!_isHost || _hostGameState == null) return;
+    final myEnginePlayer =
+        _hostGameState!.players[_hostGameState!.activePlayerIndex];
+    final result = _engine.giveWholeSuitPunishment(
+      _hostGameState!,
+      myEnginePlayer.id,
+    );
+    if (result.moveType == MoveType.invalidMove) {
+      _audio.playErrorSound();
+      emit(OnlineError(result.message ?? 'Invalid move'));
+      _emitHostGameState(emit);
+      return;
+    }
+    _audio.playPunishSound();
+    _hostGameState = result.gameState;
+    _advanceIfTurnTransition();
+    await _syncStateToRtdb();
+    _emitHostGameState(emit);
+  }
+
   Future<void> _onStartNextRound(
     OnlineStartNextRound event,
     Emitter<OnlineState> emit,
@@ -506,6 +532,25 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
 
     final data = event.data;
     final type = data['type'] as String?;
+
+    final activeId =
+        _hostGameState!.players[_hostGameState!.activePlayerIndex].id;
+
+    if (type == 'giveWholeSuitPunishment') {
+      final result = _engine.giveWholeSuitPunishment(_hostGameState!, activeId);
+      _audio.playPunishSound();
+      if (result.moveType != MoveType.invalidMove) {
+        _hostGameState = result.gameState;
+        _advanceIfTurnTransition();
+        await repository.clearPendingAction(_room!.roomId);
+        await _syncStateToRtdb();
+      } else {
+        await repository.clearPendingAction(_room!.roomId);
+      }
+      _emitHostGameState(emit);
+      return;
+    }
+
     final suitStr = data['cardSuit'] as String?;
     final rankStr = data['cardRank'] as String?;
     if (suitStr == null || rankStr == null) return;
@@ -519,9 +564,6 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       orElse: () => Rank.ace,
     );
     final card = PlayingCard(suit: suit, rank: rank);
-
-    final activeId =
-        _hostGameState!.players[_hostGameState!.activePlayerIndex].id;
 
     MoveResult result;
     if (type == 'givePunishment') {
@@ -1520,6 +1562,8 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
           .toList(),
       if (r.punishmentCard != null)
         'punishmentCard': r.punishmentCard!.toJson(),
+      if (r.punishmentCards != null)
+        'punishmentCards': r.punishmentCards!.map((c) => c.toJson()).toList(),
       if (punishmentReceiverUid != null)
         'punishmentReceiverUid': punishmentReceiverUid,
     };
@@ -1542,11 +1586,21 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
         card: PlayingCard.fromJson(m),
       );
     }).toList();
+    List<PlayingCard>? punishmentCards;
+    final punishCardsRaw = data['punishmentCards'];
+    if (punishCardsRaw is List<Object?>) {
+      punishmentCards = punishCardsRaw.whereType<Map<Object?, Object?>>().map((c) {
+        final m = c.map((k, v) => MapEntry(k.toString(), v));
+        return PlayingCard.fromJson(m);
+      }).toList();
+    }
     PlayingCard? punishmentCard;
     final punishCardRaw = data['punishmentCard'];
     if (punishCardRaw is Map<Object?, Object?>) {
       final m = punishCardRaw.map((k, v) => MapEntry(k.toString(), v));
       punishmentCard = PlayingCard.fromJson(m);
+    } else if (punishmentCards != null && punishmentCards.isNotEmpty) {
+      punishmentCard = punishmentCards.first;
     }
     return RoundModel(
       roundNumber: data['roundNumber'] as int? ?? 0,
@@ -1555,6 +1609,7 @@ class OnlineBloc extends Bloc<OnlineEvent, OnlineState> {
       playedCards: playedCards,
       winnerId: data['winnerId'] as String?,
       punishmentCard: punishmentCard,
+      punishmentCards: punishmentCards,
     );
   }
 

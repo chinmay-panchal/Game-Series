@@ -112,6 +112,15 @@ void main() {
         ),
         findsOneWidget,
       );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is RichText &&
+              widget.text.toPlainText().contains('Punish Whole Suite') &&
+              widget.text.toPlainText().contains('Instant Win Rule'),
+        ),
+        findsOneWidget,
+      );
 
       // Tap Close button in header to dismiss
       await tester.tap(find.byTooltip('Close'));

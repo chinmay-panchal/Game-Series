@@ -28,6 +28,7 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
     on<RevealHand>(_onRevealHand);
     on<PlayCard>(_onPlayCard);
     on<GivePunishmentCard>(_onGivePunishmentCard);
+    on<GiveWholeSuitPunishment>(_onGiveWholeSuitPunishment);
     on<StartNextRound>(_onStartNextRound);
     on<DistributeNewCards>(_onDistributeNewCards);
     on<RestartGame>(_onRestartGame);
@@ -101,6 +102,25 @@ class GameBloc extends Bloc<GameEvent, GameBlocState> {
 
     final giverId = _internalState!.players[_internalState!.activePlayerIndex].id;
     final result = _engine.givePunishment(_internalState!, giverId, event.card);
+    _internalState = result.gameState;
+    _saveState();
+
+    if (result.moveType == MoveType.invalidMove) {
+      _audio.playErrorSound();
+      emit(GameError(result.message ?? "Invalid move"));
+      _emitStateBasedOnPhase(emit, _internalState!);
+      return;
+    }
+
+    _audio.playPunishSound();
+    _emitStateBasedOnPhase(emit, _internalState!);
+  }
+
+  void _onGiveWholeSuitPunishment(GiveWholeSuitPunishment event, Emitter<GameBlocState> emit) {
+    if (_internalState == null) return;
+
+    final giverId = _internalState!.players[_internalState!.activePlayerIndex].id;
+    final result = _engine.giveWholeSuitPunishment(_internalState!, giverId);
     _internalState = result.gameState;
     _saveState();
 

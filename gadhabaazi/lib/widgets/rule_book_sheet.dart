@@ -203,6 +203,12 @@ class RuleBookSheet extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   _buildBullet(
+                    title: 'Punish Whole Suite (Instant Win Rule)',
+                    description:
+                        'If you get an opportunity to punish and have only one card category remaining in your hand (e.g. 3 Spades and no other category cards), you get a special yellow "Punish Whole Suite" button! All your remaining cards are sent at once to the punished player (the highest-ranked card holder), immediately emptying your hand to finish and win! (Note: If you hold cards from multiple categories, such as 1 Spade and 2 Diamonds, you will not get this button and can only punish with one card at a time).',
+                  ),
+                  const SizedBox(height: 10),
+                  _buildBullet(
                     title: 'Endless Loop Rule (5 Fresh Cards)',
                     description:
                         'If the final two players get stuck in a loop unable to finish because they hold cards of different suits, 5 fresh cards are dealt to each player from the played deck to break the deadlock and keep the battle going!',

@@ -281,15 +281,15 @@ class RoomRepository {
   Future<void> submitPendingAction({
     required String roomId,
     required String playerId,
-    required String type, // 'playCard' | 'givePunishment'
-    required String cardSuit,
-    required String cardRank,
+    required String type, // 'playCard' | 'givePunishment' | 'giveWholeSuitPunishment'
+    String? cardSuit,
+    String? cardRank,
   }) async {
     await _db.ref('rooms/$roomId/pendingAction').set({
       'playerId': playerId,
       'type': type,
-      'cardSuit': cardSuit,
-      'cardRank': cardRank,
+      if (cardSuit != null) 'cardSuit': cardSuit,
+      if (cardRank != null) 'cardRank': cardRank,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
   }

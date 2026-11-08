@@ -43,14 +43,63 @@ class _PunishmentScreenState extends State<PunishmentScreen> {
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 16),
                 ),
                 const Spacer(),
-                if (_selectedCard != null)
-                  ElevatedButton(
-                    onPressed: () {
-                      context.read<GameBloc>().add(GivePunishmentCard(_selectedCard!));
-                    },
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.redCard),
-                    child: const Text("Confirm Punishment", style: TextStyle(color: const Color(0xFFC2C8A4))),
-                  ),
+                Builder(
+                  builder: (context) {
+                    final hand = widget.state.givingPlayer.hand;
+                    final uniqueSuits = hand.map((c) => c.suit).toSet();
+                    final canPunishWholeSuit = uniqueSuits.length == 1;
+
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (canPunishWholeSuit) ...[
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              context.read<GameBloc>().add(const GiveWholeSuitPunishment());
+                            },
+                            icon: const Icon(Icons.bolt, color: Color(0xFF2C1A0E)),
+                            label: Text(
+                              hand.length > 1
+                                  ? "Punish Whole Suite (${hand.length} Cards)"
+                                  : "Punish Whole Suite",
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: Color(0xFF2C1A0E),
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFE3B13C),
+                              foregroundColor: const Color(0xFF2C1A0E),
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                              side: const BorderSide(color: Color(0xFFF2D87B), width: 2),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              elevation: 4,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        if (_selectedCard != null)
+                          ElevatedButton(
+                            onPressed: () {
+                              context.read<GameBloc>().add(GivePunishmentCard(_selectedCard!));
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red.shade900,
+                              foregroundColor: const Color(0xFFC2C8A4),
+                              side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: Text(
+                              canPunishWholeSuit
+                                  ? "Punish with This Card Only"
+                                  : "Confirm Punishment",
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
                 const SizedBox(height: 32),
                 CategorizedHandWidget(
                   cards: widget.state.givingPlayer.hand,

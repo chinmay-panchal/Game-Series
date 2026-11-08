@@ -164,19 +164,27 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
             final punisherName = punisherEngineId != null
                 ? state.playerNames[punisherEngineId] ?? 'Someone'
                 : 'Someone';
+            final pCards = state.completedRound.punishmentCards;
+            final isWholeSuite = pCards != null && pCards.length > 1;
 
             if (myUid == state.punishmentReceiverUid) {
               final card = state.punishmentCard!;
+              final msg = isWholeSuite
+                  ? '🎴 $punisherName punished you with whole suite (${pCards.length} cards of ${card.suit.symbol})!'
+                  : '🎴 $punisherName punished you with ${card.rank.label}${card.suit.symbol}!';
               PremiumToast.show(
                 context,
-                '🎴 $punisherName punished you with ${card.rank.label}${card.suit.symbol}!',
+                msg,
                 isError: true,
                 duration: const Duration(seconds: 5),
               );
             } else {
+              final msg = isWholeSuite
+                  ? '🎴 $punisherName punished ${state.punishmentReceiverName} with whole suite (${pCards.length} cards)!'
+                  : '🎴 $punisherName punished ${state.punishmentReceiverName}!';
               PremiumToast.show(
                 context,
-                '🎴 $punisherName punished ${state.punishmentReceiverName}!',
+                msg,
                 isError: true,
                 duration: const Duration(seconds: 4),
               );
@@ -303,64 +311,76 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
               children: [
                 const AnimatedBackground(child: SizedBox.expand()),
                 SafeArea(
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Column(
-                      children: [
-                        AnimatedOpacity(
-                          opacity: _isDealing ? 0.0 : 1.0,
-                          duration: const Duration(milliseconds: 500),
-                          child: _buildHeader(context, state),
-                        ),
-                        const Spacer(),
-                        Builder(
-                          builder: (ctx) {
-                            // Only skip dealing animation when rejoining an in-progress game
-                            if (_isDealing && widget.isRejoin) {
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted && _isDealing) {
-                                  setState(() => _isDealing = false);
-                                }
-                              });
-                            }
-                            return _isDealing
-                                ? DealingAnimationWidget(
-                                    totalCardsToDealVisual: _dealAmount,
-                                    onComplete: () {
-                                      if (mounted)
-                                        setState(() => _isDealing = false);
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return SingleChildScrollView(
+                        physics: const ClampingScrollPhysics(),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          child: IntrinsicHeight(
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: Column(
+                                children: [
+                                  AnimatedOpacity(
+                                    opacity: _isDealing ? 0.0 : 1.0,
+                                    duration: const Duration(milliseconds: 500),
+                                    child: _buildHeader(context, state),
+                                  ),
+                                  const Spacer(),
+                                  Builder(
+                                    builder: (ctx) {
+                                      // Only skip dealing animation when rejoining an in-progress game
+                                      if (_isDealing && widget.isRejoin) {
+                                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                                          if (mounted && _isDealing) {
+                                            setState(() => _isDealing = false);
+                                          }
+                                        });
+                                      }
+                                      return _isDealing
+                                          ? DealingAnimationWidget(
+                                              totalCardsToDealVisual: _dealAmount,
+                                              onComplete: () {
+                                                if (mounted)
+                                                  setState(() => _isDealing = false);
+                                              },
+                                            )
+                                          : SizedBox(
+                                              key: _tableKey,
+                                              child: Stack(
+                                                alignment: Alignment.center,
+                                                children: [
+                                                  _buildTableCenter(state),
+                                                  if (_showRemoteDrop &&
+                                                      _remoteDropCard != null)
+                                                    RemoteCardDropAnimation(
+                                                      card: _remoteDropCard!,
+                                                      isPunishment:
+                                                          _remoteDropIsPunishment,
+                                                      onComplete: () {
+                                                        if (mounted)
+                                                          setState(
+                                                            () => _showRemoteDrop = false,
+                                                          );
+                                                      },
+                                                    ),
+                                                ],
+                                              ),
+                                            );
                                     },
-                                  )
-                                : SizedBox(
-                                    key: _tableKey,
-                                    child: Stack(
-                                      alignment: Alignment.center,
-                                      children: [
-                                        _buildTableCenter(state),
-                                        if (_showRemoteDrop &&
-                                            _remoteDropCard != null)
-                                          RemoteCardDropAnimation(
-                                            card: _remoteDropCard!,
-                                            isPunishment:
-                                                _remoteDropIsPunishment,
-                                            onComplete: () {
-                                              if (mounted)
-                                                setState(
-                                                  () => _showRemoteDrop = false,
-                                                );
-                                            },
-                                          ),
-                                      ],
-                                    ),
-                                  );
-                          },
+                                  ),
+                                  const Spacer(),
+                                  _isDealing
+                                      ? const SizedBox(height: 80)
+                                      : _buildBottomArea(context, state),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
-                        const Spacer(),
-                        _isDealing
-                            ? const SizedBox(height: 80)
-                            : _buildBottomArea(context, state),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                 ),
                 // ── Minimal Room Code Chip at Top Right ──
@@ -634,6 +654,7 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
         highestCard: null,
         playerNames: state.playerNames,
         punishmentCard: state.punishmentCard,
+        punishmentCards: state.completedRound.punishmentCards,
       );
     }
     return const SizedBox(height: 220);
@@ -852,27 +873,108 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
 
   Widget _buildMyTurnArea(BuildContext context, OnlinePlayerTurn state) {
     final mustPunish =
+        state.currentRound != null &&
+        state.currentRound!.playedCards.isNotEmpty &&
         state.currentSuit != null &&
         !state.myHand.any((c) => c.suit == state.currentSuit);
+
+    final uniqueSuits = state.myHand.map((c) => c.suit).toSet();
+    final canPunishWholeSuit = mustPunish && uniqueSuits.length == 1;
+    final remainingCardsCount = state.myHand.length;
 
     return Column(
       children: [
         if (_selectedCard != null) ...[
           if (mustPunish) ...[
-            ElevatedButton(
-              onPressed: () {
-                _submitMove(context, state, isPunishment: true);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade900,
-                foregroundColor: const Color(0xFFC2C8A4),
-                side: const BorderSide(color: Colors.redAccent, width: 1.5),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A2C1A),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+                ],
+                border: Border.all(color: Colors.redAccent, width: 2),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+                  SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      "No matching suit\nGive card as punishment to highest bidder",
+                      style: TextStyle(
+                        color: Color(0xFFF2D87B),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (canPunishWholeSuit) ...[
+              ElevatedButton.icon(
+                onPressed: () {
+                  _submitWholeSuitPunishment(context, state);
+                },
+                icon: const Icon(Icons.bolt, color: Color(0xFF2C1A0E)),
+                label: Text(
+                  remainingCardsCount > 1
+                      ? 'Punish Whole Suite ($remainingCardsCount Cards)'
+                      : 'Punish Whole Suite',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2C1A0E),
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFE3B13C),
+                  foregroundColor: const Color(0xFF2C1A0E),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  side: const BorderSide(color: Color(0xFFF2D87B), width: 2),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 4,
                 ),
               ),
-              child: const Text('Give Punishment Card'),
-            ),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: () {
+                  _submitMove(context, state, isPunishment: true);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade900,
+                  foregroundColor: const Color(0xFFC2C8A4),
+                  side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Punish with This Card Only'),
+              ),
+            ] else ...[
+              ElevatedButton(
+                onPressed: () {
+                  _submitMove(context, state, isPunishment: true);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade900,
+                  foregroundColor: const Color(0xFFC2C8A4),
+                  side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Give Punishment Card'),
+              ),
+            ],
           ] else ...[
             ElevatedButton(
               onPressed: () => _submitMove(context, state, isPunishment: false),
@@ -895,8 +997,44 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
               child: const Text('Play Card'),
             ),
           ],
-        ] else
-          const SizedBox(height: 48),
+        ] else ...[
+          if (canPunishWholeSuit)
+            Column(
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () {
+                    _submitWholeSuitPunishment(context, state);
+                  },
+                  icon: const Icon(Icons.bolt, color: Color(0xFF2C1A0E)),
+                  label: Text(
+                    remainingCardsCount > 1
+                        ? 'Punish Whole Suite ($remainingCardsCount Cards)'
+                        : 'Punish Whole Suite',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2C1A0E),
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFE3B13C),
+                    foregroundColor: const Color(0xFF2C1A0E),
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    side: const BorderSide(color: Color(0xFFF2D87B), width: 2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: 4,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Empty your hand & win, or select a card to punish with 1 card',
+                  style: TextStyle(color: Color(0xFFC2C8A4), fontSize: 12),
+                ),
+              ],
+            )
+          else
+            const SizedBox(height: 48),
+        ],
         const SizedBox(height: 16),
         CategorizedHandWidget(
           key: ValueKey(state.activePlayerName),
@@ -913,6 +1051,27 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
         const SizedBox(height: 16),
       ],
     );
+  }
+
+  void _submitWholeSuitPunishment(
+    BuildContext context,
+    OnlinePlayerTurn state,
+  ) {
+    setState(() => _selectedCard = null);
+
+    final bloc = context.read<OnlineBloc>();
+    if (state.isHost) {
+      bloc.add(const OnlineGiveWholeSuitPunishment());
+    } else {
+      final roomId = bloc.currentRoomId;
+      final uid = bloc.myUid;
+      if (roomId == null || uid == null) return;
+      bloc.repository.submitPendingAction(
+        roomId: roomId,
+        playerId: uid,
+        type: 'giveWholeSuitPunishment',
+      );
+    }
   }
 
   void _submitMove(
@@ -961,6 +1120,10 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
     BuildContext context,
     OnlinePunishmentNeeded state,
   ) {
+    final uniqueSuits = state.myHand.map((c) => c.suit).toSet();
+    final canPunishWholeSuit = uniqueSuits.length == 1;
+    final remainingCardsCount = state.myHand.length;
+
     return Column(
       children: [
         Container(
@@ -981,7 +1144,47 @@ class _OnlineGameScreenState extends State<OnlineGameScreen>
             textAlign: TextAlign.center,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        if (canPunishWholeSuit) ...[
+          ElevatedButton.icon(
+            onPressed: () {
+              final bloc = context.read<OnlineBloc>();
+              if (bloc.isHost) {
+                bloc.add(const OnlineGiveWholeSuitPunishment());
+              } else {
+                final roomId = bloc.currentRoomId;
+                final uid = bloc.myUid;
+                if (roomId != null && uid != null) {
+                  bloc.repository.submitPendingAction(
+                    roomId: roomId,
+                    playerId: uid,
+                    type: 'giveWholeSuitPunishment',
+                  );
+                }
+              }
+            },
+            icon: const Icon(Icons.bolt, color: Color(0xFF2C1A0E)),
+            label: Text(
+              remainingCardsCount > 1
+                  ? 'Punish Whole Suite ($remainingCardsCount Cards)'
+                  : 'Punish Whole Suite',
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2C1A0E),
+              ),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE3B13C),
+              foregroundColor: const Color(0xFF2C1A0E),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              side: const BorderSide(color: Color(0xFFF2D87B), width: 2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 4,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         CategorizedHandWidget(
           cards: state.myHand,
           selectedCard: _selectedCard,

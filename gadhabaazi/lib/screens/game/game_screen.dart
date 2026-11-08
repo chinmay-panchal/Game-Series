@@ -43,10 +43,15 @@ class _GameScreenState extends State<GameScreen> {
           } else if (state is GameRoundCompleted) {
             // Show punishment toast if this round ended with a punishment
             if (state.completedRound.punishmentCard != null) {
+              final pCards = state.completedRound.punishmentCards;
+              final isWholeSuite = pCards != null && pCards.length > 1;
               final card = state.completedRound.punishmentCard!;
+              final msg = isWholeSuite
+                  ? '🎴 Punished whole suite (${pCards.length} cards of ${card.suit.symbol})! Check your hand.'
+                  : '🎴 Punished with ${card.rank.label}${card.suit.symbol}! Check your hand.';
               PremiumToast.show(
                 context,
-                '🎴 Punished with ${card.rank.label}${card.suit.symbol}! Check your hand.',
+                msg,
                 isError: true,
                 duration: const Duration(seconds: 4),
               );

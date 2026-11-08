@@ -45,6 +45,10 @@ class GivePunishmentCard extends GameEvent {
   List<Object?> get props => [card];
 }
 
+class GiveWholeSuitPunishment extends GameEvent {
+  const GiveWholeSuitPunishment();
+}
+
 class StartNextRound extends GameEvent {}
 
 class DistributeNewCards extends GameEvent {}

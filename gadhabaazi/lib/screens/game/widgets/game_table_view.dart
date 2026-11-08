@@ -42,17 +42,29 @@ class _GameTableViewState extends State<GameTableView> {
         children: [
           const AnimatedBackground(child: SizedBox.expand()),
           SafeArea(
-            child: SizedBox(
-              width: double.infinity,
-              child: Column(
-                children: [
-                  _buildHeader(state),
-                  const Spacer(),
-                  _buildTableCenter(state),
-                  const Spacer(),
-                  _buildBottomArea(state, context),
-                ],
-              ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                    child: IntrinsicHeight(
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: Column(
+                          children: [
+                            _buildHeader(state),
+                            const Spacer(),
+                            _buildTableCenter(state),
+                            const Spacer(),
+                            _buildBottomArea(state, context),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -192,17 +204,21 @@ class _GameTableViewState extends State<GameTableView> {
         );
       }
 
+      final mustPunish = state.currentRound != null &&
+          state.currentRound!.playedCards.isNotEmpty &&
+          state.currentSuit != null &&
+          !state.activePlayer.hand.any(
+            (c) => c.suit == state.currentSuit,
+          );
+      final uniqueSuits = state.activePlayer.hand.map((c) => c.suit).toSet();
+      final canPunishWholeSuit = mustPunish && uniqueSuits.length == 1;
+      final remainingCardsCount = state.activePlayer.hand.length;
+
       return Column(
         children: [
           if (_selectedCard != null) ...[
             Builder(
               builder: (context) {
-                final mustPunish =
-                    state.currentSuit != null &&
-                    !state.activePlayer.hand.any(
-                      (c) => c.suit == state.currentSuit,
-                    );
-
                 if (mustPunish) {
                   // Player has no card of current suit — selected card IS the punishment card
                   return Column(
@@ -210,7 +226,7 @@ class _GameTableViewState extends State<GameTableView> {
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 12,
+                          vertical: 10,
                         ),
                         decoration: BoxDecoration(
                           color: const Color(0xFF1A2C1A),
@@ -225,34 +241,82 @@ class _GameTableViewState extends State<GameTableView> {
                           children: [
                             Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
                             SizedBox(width: 8),
-                            Text(
-                              "No matching suit\nThis card will be given as punishment",
-                              style: TextStyle(
-                                color: Color(0xFFF2D87B),
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
+                            Flexible(
+                              child: Text(
+                                "No matching suit\nGive card as punishment to highest bidder",
+                                style: TextStyle(
+                                  color: Color(0xFFF2D87B),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          AudioService().playTapSound();
-                          context.read<GameBloc>().add(
-                            GivePunishmentCard(_selectedCard!),
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red.shade900,
-                          foregroundColor: const Color(0xFFC2C8A4),
-                          side: const BorderSide(color: Colors.redAccent, width: 1.5),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      const SizedBox(height: 10),
+                      if (canPunishWholeSuit) ...[
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            AudioService().playTapSound();
+                            context.read<GameBloc>().add(
+                              const GiveWholeSuitPunishment(),
+                            );
+                          },
+                          icon: const Icon(Icons.bolt, color: Color(0xFF2C1A0E)),
+                          label: Text(
+                            remainingCardsCount > 1
+                                ? 'Punish Whole Suite ($remainingCardsCount Cards)'
+                                : 'Punish Whole Suite',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2C1A0E),
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFE3B13C),
+                            foregroundColor: const Color(0xFF2C1A0E),
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            side: const BorderSide(color: Color(0xFFF2D87B), width: 2),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 4,
+                          ),
                         ),
-                        child: const Text("Give Punishment Card"),
-                      ),
+                        const SizedBox(height: 8),
+                        ElevatedButton(
+                          onPressed: () {
+                            AudioService().playTapSound();
+                            context.read<GameBloc>().add(
+                              GivePunishmentCard(_selectedCard!),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade900,
+                            foregroundColor: const Color(0xFFC2C8A4),
+                            side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text("Punish with This Card Only"),
+                        ),
+                      ] else ...[
+                        ElevatedButton(
+                          onPressed: () {
+                            AudioService().playTapSound();
+                            context.read<GameBloc>().add(
+                              GivePunishmentCard(_selectedCard!),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade900,
+                            foregroundColor: const Color(0xFFC2C8A4),
+                            side: const BorderSide(color: Colors.redAccent, width: 1.5),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text("Give Punishment Card"),
+                        ),
+                      ],
                     ],
                   );
                 } else {
@@ -274,8 +338,47 @@ class _GameTableViewState extends State<GameTableView> {
                 }
               },
             ),
-          ] else
-            const SizedBox(height: 48),
+          ] else ...[
+            if (canPunishWholeSuit)
+              Column(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      AudioService().playTapSound();
+                      context.read<GameBloc>().add(
+                        const GiveWholeSuitPunishment(),
+                      );
+                    },
+                    icon: const Icon(Icons.bolt, color: Color(0xFF2C1A0E)),
+                    label: Text(
+                      remainingCardsCount > 1
+                          ? 'Punish Whole Suite ($remainingCardsCount Cards)'
+                          : 'Punish Whole Suite',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2C1A0E),
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFE3B13C),
+                      foregroundColor: const Color(0xFF2C1A0E),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      side: const BorderSide(color: Color(0xFFF2D87B), width: 2),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 4,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Empty your hand & win, or select a card to punish with 1 card',
+                    style: TextStyle(color: Color(0xFFC2C8A4), fontSize: 12),
+                  ),
+                ],
+              )
+            else
+              const SizedBox(height: 48),
+          ],
           const SizedBox(height: 16),
           CategorizedHandWidget(
             key: ValueKey(

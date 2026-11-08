@@ -40,6 +40,10 @@ class OnlineGivePunishment extends OnlineEvent {
   List<Object?> get props => [card];
 }
 
+class OnlineGiveWholeSuitPunishment extends OnlineEvent {
+  const OnlineGiveWholeSuitPunishment();
+}
+
 class OnlineStartNextRound extends OnlineEvent {}
 
 class OnlineDistributeNewCards extends OnlineEvent {}

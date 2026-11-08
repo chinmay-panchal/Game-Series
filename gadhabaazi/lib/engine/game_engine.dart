@@ -401,6 +401,105 @@ class GameEngine {
       currentRound: state.currentRound!.copyWith(
         winnerId: giverId,
         punishmentCard: card, // store so UI can show "you got punished with X"
+        punishmentCards: [card],
+      ),
+    );
+
+    return _completeRound(newState);
+  }
+
+  /// Punishes all cards of the player's remaining suit at once to the highest-card holder.
+  /// Only allowed when the player has only ONE category/suit remaining in hand and cannot follow suit.
+  MoveResult giveWholeSuitPunishment(GameState state, String giverId) {
+    if (state.players[state.activePlayerIndex].id != giverId) {
+      return MoveResult(
+        gameState: state,
+        moveType: MoveType.invalidMove,
+        message: "Not your turn",
+      );
+    }
+
+    Player giver = state.players[state.activePlayerIndex];
+    if (giver.hand.isEmpty) {
+      return MoveResult(
+        gameState: state,
+        moveType: MoveType.invalidMove,
+        message: "Hand is empty",
+      );
+    }
+
+    // Player must have only one suit category remaining across their hand
+    final uniqueSuits = giver.hand.map((c) => c.suit).toSet();
+    if (uniqueSuits.length != 1) {
+      return MoveResult(
+        gameState: state,
+        moveType: MoveType.invalidMove,
+        message: "Can only punish whole suite when only one suit remains in hand",
+      );
+    }
+
+    if (state.currentRound == null || state.currentRound!.playedCards.isEmpty) {
+      return MoveResult(
+        gameState: state,
+        moveType: MoveType.invalidMove,
+        message: "No round in progress",
+      );
+    }
+
+    // Must not have the current lead suit (must punish)
+    if (giver.hand.any((c) => c.suit == state.currentRound!.suit)) {
+      return MoveResult(
+        gameState: state,
+        moveType: MoveType.invalidMove,
+        message: "You must follow the current suit!",
+      );
+    }
+
+    final punishmentCards = List<PlayingCard>.from(giver.hand);
+
+    // Find who holds the highest card of the lead suit
+    String targetId = _punishmentRules.targetOfPunishment(
+      state.currentRound!.playedCards,
+    );
+    int targetIndex = state.players.indexWhere((p) => p.id == targetId);
+
+    List<Player> newPlayers = List.from(state.players);
+
+    // Collect all cards played on the table during this round
+    List<PlayingCard> tableCards = state.currentRound!.playedCards
+        .map((p) => p.card)
+        .toList();
+
+    // Empty the giver's hand
+    int giverIndex = newPlayers.indexWhere((p) => p.id == giverId);
+    newPlayers[giverIndex] = newPlayers[giverIndex].copyWith(hand: []);
+
+    // Give ALL table cards + all whole suite punishment cards to target
+    List<PlayingCard> newTargetHand = List.from(newPlayers[targetIndex].hand)
+      ..addAll(tableCards)
+      ..addAll(punishmentCards);
+
+    newTargetHand.sort((a, b) {
+      if (a.suit.index != b.suit.index) return a.suit.index.compareTo(b.suit.index);
+      return a.rank.index.compareTo(b.rank.index);
+    });
+
+    newPlayers[targetIndex] = newPlayers[targetIndex].copyWith(
+      hand: newTargetHand,
+    );
+
+    MoveHistory newHistory = state.history.record(
+      giverId,
+      "Punished whole suite (${punishmentCards.length} cards) to $targetId. All table cards collected by $targetId.",
+    );
+
+    GameState newState = state.copyWith(
+      players: newPlayers,
+      history: newHistory,
+      currentRound: state.currentRound!.copyWith(
+        winnerId: giverId,
+        punishmentCard: punishmentCards.first,
+        punishmentCards: punishmentCards,
       ),
     );
 
